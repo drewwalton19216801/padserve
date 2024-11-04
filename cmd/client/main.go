@@ -40,12 +40,13 @@ func encrypt(message, key []byte) []byte {
 	return ciphertext
 }
 
-func readMessages(conn net.Conn) {
+func readMessages(conn net.Conn, done chan bool) {
 	reader := bufio.NewReader(conn)
 	for {
 		message, err := reader.ReadString('\n')
 		if err != nil {
 			fmt.Println("Disconnected from server.")
+			done <- true // Signal main function to exit
 			return
 		}
 		message = strings.TrimSpace(message)
@@ -102,26 +103,19 @@ func readMessages(conn net.Conn) {
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run client.go <YourID>")
-		return
-	}
-	clientID := os.Args[1]
-
-	// Ensure Tailscale is running
-	if !tailscaleRunning() {
-		fmt.Println("Tailscale is not running. Please start it and try again.")
-		return
-	}
-
-	// You need to know the server's Tailscale IP. Here we'll assume you have it.
-	// Alternatively, you could discover it or pass it as an argument.
 	if len(os.Args) < 3 {
 		fmt.Println("Usage: go run client.go <YourID> <ServerTailscaleIP>")
 		return
 	}
+	clientID := os.Args[1]
 	serverIP := os.Args[2]
 	address := serverIP + ":12345"
+
+	// Check if the local IP address belongs to a Tailscale interface
+	if !tailscaleRunning() {
+		fmt.Println("Error: This client must be run on a Tailscale device.")
+		return
+	}
 
 	conn, err := net.Dial("tcp", address)
 	if err != nil {
@@ -135,58 +129,81 @@ func main() {
 	fmt.Println("Connected to the server. Type your commands below:")
 	fmt.Print("> ")
 
+	// Channel to signal when to exit
+	done := make(chan bool)
+
 	// Start a goroutine to read messages from the server
-	go readMessages(conn)
+	go readMessages(conn, done)
 
-	// Read user input and send to the server
-	stdinReader := bufio.NewReader(os.Stdin)
-	for {
-		input, err := stdinReader.ReadString('\n')
-		if err != nil {
-			fmt.Println("Error reading input:", err)
-			return
-		}
-		input = strings.TrimSpace(input)
-
-		if strings.HasPrefix(input, "SEND") {
-			// Expected format:
-			// - To a client: SEND <RecipientID> <Message>
-			// - To all: SEND ALL <Message>
-			parts := strings.SplitN(input, " ", 3)
-			if len(parts) != 3 {
-				fmt.Println("Invalid SEND command. Use: SEND <RecipientID|ALL> <Message>")
-				continue
+	// Start a goroutine to read user input
+	inputChan := make(chan string)
+	go func() {
+		stdinReader := bufio.NewReader(os.Stdin)
+		for {
+			input, err := stdinReader.ReadString('\n')
+			if err != nil {
+				fmt.Println("Error reading input:", err)
+				close(inputChan)
+				return
 			}
-			recipientID := parts[1]
-			messageText := parts[2]
+			input = strings.TrimSpace(input)
+			inputChan <- input
+		}
+	}()
 
-			if recipientID == "ALL" {
-				// Send plaintext to server for broadcast
-				fmt.Fprintf(conn, "SEND ALL %s\n", messageText)
-			} else {
-				// Generate OTP key
-				key := make([]byte, len(messageText))
-				_, err := rand.Read(key)
-				if err != nil {
-					fmt.Println("Error generating OTP key:", err)
+	// Main loop to handle user input and exit signal
+	for {
+		select {
+		case <-done:
+			fmt.Println("Exiting...")
+			return
+		case input, ok := <-inputChan:
+			if !ok {
+				fmt.Println("Input channel closed.")
+				return
+			}
+			if strings.HasPrefix(input, "SEND") {
+				// Expected format:
+				// - To a client: SEND <RecipientID> <Message>
+				// - To all: SEND ALL <Message>
+				parts := strings.SplitN(input, " ", 3)
+				if len(parts) != 3 {
+					fmt.Println("Invalid SEND command. Use: SEND <RecipientID|ALL> <Message>")
+					fmt.Print("> ")
 					continue
 				}
+				recipientID := parts[1]
+				messageText := parts[2]
 
-				// Encrypt the message
-				plaintext := []byte(messageText)
-				ciphertext := encrypt(plaintext, key)
+				if recipientID == "ALL" {
+					// Send plaintext to server for broadcast
+					fmt.Fprintf(conn, "SEND ALL %s\n", messageText)
+				} else {
+					// Generate OTP key
+					key := make([]byte, len(messageText))
+					_, err := rand.Read(key)
+					if err != nil {
+						fmt.Println("Error generating OTP key:", err)
+						fmt.Print("> ")
+						continue
+					}
 
-				// Encode key and ciphertext in hex
-				keyHex := hex.EncodeToString(key)
-				ciphertextHex := hex.EncodeToString(ciphertext)
+					// Encrypt the message
+					plaintext := []byte(messageText)
+					ciphertext := encrypt(plaintext, key)
 
-				// Send the encrypted message in the format: SEND <RecipientID> <key_hex>|<ciphertext_hex>
-				encryptedData := keyHex + "|" + ciphertextHex
-				fmt.Fprintf(conn, "SEND %s %s\n", recipientID, encryptedData)
+					// Encode key and ciphertext in hex
+					keyHex := hex.EncodeToString(key)
+					ciphertextHex := hex.EncodeToString(ciphertext)
+
+					// Send the encrypted message in the format: SEND <RecipientID> <key_hex>|<ciphertext_hex>
+					encryptedData := keyHex + "|" + ciphertextHex
+					fmt.Fprintf(conn, "SEND %s %s\n", recipientID, encryptedData)
+				}
+			} else {
+				fmt.Println("Unknown command. Use 'SEND <RecipientID|ALL> <Message>'")
 			}
-		} else {
-			fmt.Println("Unknown command. Use 'SEND <RecipientID|ALL> <Message>'")
+			fmt.Print("> ")
 		}
-		fmt.Print("> ")
 	}
 }
