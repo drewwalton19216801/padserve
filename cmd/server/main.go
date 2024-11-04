@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"strings"
@@ -75,34 +77,84 @@ func handleClient(conn net.Conn) {
 			parts := strings.SplitN(message, " ", 3)
 			if len(parts) == 3 {
 				recipientID := parts[1]
-				encryptedMessage := parts[2]
-
-				// Validate message format
-				if !strings.Contains(encryptedMessage, "|") {
-					conn.Write([]byte("ERROR Invalid message format\n"))
-					fmt.Printf("Invalid message format from %s. Disconnecting client.\n", clientID)
-					conn.Close()
-					return
-				}
-
-				// Check if the recipient exists
-				mutex.Lock()
-				recipient, exists := clients[recipientID]
-				mutex.Unlock()
-				if exists {
-					// Forward the encrypted message to the recipient
-					recipient.Conn.Write([]byte(fmt.Sprintf("MESSAGE from %s: %s\n", clientID, encryptedMessage)))
-					conn.Write([]byte("MESSAGE SENT\n"))
+				encryptedData := parts[2]
+				if recipientID == "ALL" {
+					// Server handles broadcast
+					handleBroadcast(clientID, encryptedData)
+					conn.Write([]byte("BROADCAST SENT\n"))
 				} else {
-					conn.Write([]byte("ERROR Recipient not found\n"))
+					sendMessageToClient(clientID, recipientID, encryptedData)
 				}
 			} else {
 				conn.Write([]byte("ERROR Invalid SEND command\n"))
 			}
+		} else if strings.HasPrefix(message, "LIST") {
+			// List all connected clients
+			mutex.Lock()
+			for _, client := range clients {
+				conn.Write([]byte(fmt.Sprintf("CLIENT %s\n", client.ID)))
+			}
+			mutex.Unlock()
+			conn.Write([]byte("LISTED\n"))
 		} else {
 			conn.Write([]byte("ERROR Unknown command\n"))
 		}
 	}
+}
+
+func sendMessageToClient(senderID, recipientID, encryptedData string) {
+	mutex.Lock()
+	recipient, exists := clients[recipientID]
+	mutex.Unlock()
+	if exists {
+		recipient.Conn.Write([]byte(fmt.Sprintf("MESSAGE from %s: %s\n", senderID, encryptedData)))
+	} else {
+		sender, exists := clients[senderID]
+		if exists {
+			sender.Conn.Write([]byte("ERROR Recipient not found\n"))
+		}
+	}
+}
+
+func handleBroadcast(senderID, messageText string) {
+	mutex.Lock()
+	recipients := make([]*Client, 0, len(clients))
+	for id, client := range clients {
+		if id != senderID {
+			recipients = append(recipients, client)
+		}
+	}
+	mutex.Unlock()
+
+	// For each recipient, generate a unique OTP key and encrypt the message
+	for _, recipient := range recipients {
+		key := make([]byte, len(messageText))
+		_, err := rand.Read(key)
+		if err != nil {
+			fmt.Printf("Error generating OTP key for %s: %v\n", recipient.ID, err)
+			continue
+		}
+
+		// Encrypt the message
+		plaintext := []byte(messageText)
+		ciphertext := encrypt(plaintext, key)
+
+		// Encode key and ciphertext in hex
+		keyHex := hex.EncodeToString(key)
+		ciphertextHex := hex.EncodeToString(ciphertext)
+
+		// Send the encrypted message to the recipient
+		encryptedData := keyHex + "|" + ciphertextHex
+		recipient.Conn.Write([]byte(fmt.Sprintf("BROADCAST from %s: %s\n", senderID, encryptedData)))
+	}
+}
+
+func encrypt(message, key []byte) []byte {
+	ciphertext := make([]byte, len(message))
+	for i := range message {
+		ciphertext[i] = message[i] ^ key[i]
+	}
+	return ciphertext
 }
 
 func main() {

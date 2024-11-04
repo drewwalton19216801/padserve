@@ -49,24 +49,23 @@ func readMessages(conn net.Conn) {
 			return
 		}
 		message = strings.TrimSpace(message)
-		if strings.HasPrefix(message, "MESSAGE from") {
+		if strings.HasPrefix(message, "MESSAGE from") || strings.HasPrefix(message, "BROADCAST from") {
 			parts := strings.SplitN(message, ": ", 2)
 			senderInfo := parts[0]
 			encryptedData := parts[1]
 
 			// Extract sender ID
-			senderID := strings.TrimPrefix(senderInfo, "MESSAGE from ")
-
-			// Validate the encrypted data format
-			if !strings.Contains(encryptedData, "|") {
-				fmt.Printf("\rReceived malformed message from %s. Ignoring.\n> ", senderID)
-				continue
+			var senderID string
+			if strings.HasPrefix(senderInfo, "MESSAGE from") {
+				senderID = strings.TrimPrefix(senderInfo, "MESSAGE from ")
+			} else if strings.HasPrefix(senderInfo, "BROADCAST from") {
+				senderID = strings.TrimPrefix(senderInfo, "BROADCAST from ")
 			}
 
 			// Encrypted data format: key_hex|ciphertext_hex
 			dataParts := strings.SplitN(encryptedData, "|", 2)
 			if len(dataParts) != 2 {
-				fmt.Println("Invalid message format.")
+				fmt.Printf("\rInvalid message format from %s. Ignoring.\n> ", senderID)
 				continue
 			}
 			keyHex := dataParts[0]
@@ -75,22 +74,26 @@ func readMessages(conn net.Conn) {
 			// Decode hex strings
 			key, err := hex.DecodeString(keyHex)
 			if err != nil {
-				fmt.Println("Error decoding key:", err)
+				fmt.Printf("\rError decoding key from %s: %v\n> ", senderID, err)
 				continue
 			}
 			ciphertext, err := hex.DecodeString(ciphertextHex)
 			if err != nil {
-				fmt.Println("Error decoding ciphertext:", err)
+				fmt.Printf("\rError decoding ciphertext from %s: %v\n> ", senderID, err)
 				continue
 			}
 
 			// Decrypt the message
 			if len(key) != len(ciphertext) {
-				fmt.Println("Key and ciphertext lengths do not match.")
+				fmt.Printf("\rKey and ciphertext lengths do not match from %s.\n> ", senderID)
 				continue
 			}
 			plaintext := encrypt(ciphertext, key)
-			fmt.Printf("\rMessage from %s: %s\n> ", senderID, string(plaintext))
+			if strings.HasPrefix(senderInfo, "MESSAGE from") {
+				fmt.Printf("\rMessage from %s: %s\n> ", senderID, string(plaintext))
+			} else if strings.HasPrefix(senderInfo, "BROADCAST from") {
+				fmt.Printf("\rBroadcast from %s: %s\n> ", senderID, string(plaintext))
+			}
 		} else {
 			fmt.Println("\r" + message)
 			fmt.Print("> ")
@@ -145,42 +148,44 @@ func main() {
 		}
 		input = strings.TrimSpace(input)
 
-		// Check for exit or quit commands, in any combination of case
-		if strings.HasPrefix(input, "exit") || strings.HasPrefix(input, "quit") {
-			return
-		}
-
 		if strings.HasPrefix(input, "SEND") {
-			// Expected format: SEND <RecipientID> <Message>
+			// Expected format:
+			// - To a client: SEND <RecipientID> <Message>
+			// - To all: SEND ALL <Message>
 			parts := strings.SplitN(input, " ", 3)
 			if len(parts) != 3 {
-				fmt.Println("Invalid SEND command. Use: SEND <RecipientID> <Message>")
+				fmt.Println("Invalid SEND command. Use: SEND <RecipientID|ALL> <Message>")
 				continue
 			}
 			recipientID := parts[1]
 			messageText := parts[2]
 
-			// Generate OTP key
-			key := make([]byte, len(messageText))
-			_, err := rand.Read(key)
-			if err != nil {
-				fmt.Println("Error generating OTP key:", err)
-				continue
+			if recipientID == "ALL" {
+				// Send plaintext to server for broadcast
+				fmt.Fprintf(conn, "SEND ALL %s\n", messageText)
+			} else {
+				// Generate OTP key
+				key := make([]byte, len(messageText))
+				_, err := rand.Read(key)
+				if err != nil {
+					fmt.Println("Error generating OTP key:", err)
+					continue
+				}
+
+				// Encrypt the message
+				plaintext := []byte(messageText)
+				ciphertext := encrypt(plaintext, key)
+
+				// Encode key and ciphertext in hex
+				keyHex := hex.EncodeToString(key)
+				ciphertextHex := hex.EncodeToString(ciphertext)
+
+				// Send the encrypted message in the format: SEND <RecipientID> <key_hex>|<ciphertext_hex>
+				encryptedData := keyHex + "|" + ciphertextHex
+				fmt.Fprintf(conn, "SEND %s %s\n", recipientID, encryptedData)
 			}
-
-			// Encrypt the message
-			plaintext := []byte(messageText)
-			ciphertext := encrypt(plaintext, key)
-
-			// Encode key and ciphertext in hex
-			keyHex := hex.EncodeToString(key)
-			ciphertextHex := hex.EncodeToString(ciphertext)
-
-			// Send the encrypted message in the format: SEND <RecipientID> <key_hex>|<ciphertext_hex>
-			encryptedData := keyHex + "|" + ciphertextHex
-			fmt.Fprintf(conn, "SEND %s %s\n", recipientID, encryptedData)
 		} else {
-			fmt.Println("Unknown command. Use 'SEND <RecipientID> <Message>'")
+			fmt.Println("Unknown command. Use 'SEND <RecipientID|ALL> <Message>'")
 		}
 		fmt.Print("> ")
 	}
