@@ -140,12 +140,12 @@ func handleClient(conn net.Conn) {
 				mutex.Unlock()
 
 				// Print server commands
-				printCommands()
+				conn.Write([]byte(printServerCommands()))
 				conn.Write([]byte("INFO LISTED\n"))
 			}
 		} else if strings.HasPrefix(message, "SERVERHELP") {
 			// Print server commands
-			printCommands()
+			conn.Write([]byte(printServerCommands()))
 			conn.Write([]byte("SERVERHELP LISTED\n"))
 		} else {
 			conn.Write([]byte("ERROR Unknown command\n"))
@@ -208,12 +208,15 @@ func encrypt(message, key []byte) []byte {
 	return ciphertext
 }
 
-func printCommands() {
-	fmt.Println("Available server commands:")
-	fmt.Println("LIST - List all connected clients")
-	fmt.Println("INFO - Print server information")
-	fmt.Println("SERVERHELP - Print this help text")
-	fmt.Println()
+func printServerCommands() string {
+	var helptext string
+
+	helptext += "Available server commands:\n"
+	helptext += "LIST - List all connected clients\n"
+	helptext += "INFO - Print server information\n"
+	helptext += "SERVERHELP - Print this help text\n"
+
+	return helptext
 }
 
 func main() {
