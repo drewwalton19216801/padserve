@@ -7,36 +7,60 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"runtime"
 	"strings"
 )
 
-// Check if the local IP address belongs to a Tailscale interface and is not a link-local address
+// isTailscale checks if the local machine has an IP address within the Tailscale network (100.64.0.0/10).
 func isTailscale() (bool, error) {
-	// Determine the Tailscale interface name based on the OS
-	var ifaceName string
-	if runtime.GOOS == "windows" {
-		ifaceName = "Tailscale" // Typical interface name for Tailscale on Windows
-	} else {
-		ifaceName = "tailscale0" // Interface name on Linux
+	// Define the Tailscale IP range
+	_, tsNet, err := net.ParseCIDR("100.64.0.0/10")
+	if err != nil {
+		return false, fmt.Errorf("failed to parse Tailscale CIDR: %v", err)
 	}
 
-	// Check if the local IP address belongs to a Tailscale interface
-	iface, err := net.InterfaceByName(ifaceName)
+	// Get a list of all network interfaces
+	interfaces, err := net.Interfaces()
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to get network interfaces: %v", err)
 	}
-	addrs, err := iface.Addrs()
-	if err != nil {
-		return false, err
-	}
-	for _, addr := range addrs {
-		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() && !ipnet.IP.IsLinkLocalUnicast() {
-			if ipnet.IP.To4() != nil {
+
+	for _, iface := range interfaces {
+		// Skip interfaces that are down or are loopback interfaces
+		if (iface.Flags&net.FlagUp) == 0 || (iface.Flags&net.FlagLoopback) != 0 {
+			continue
+		}
+
+		// Get all addresses associated with the interface
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue // If we can't get addresses, skip this interface
+		}
+
+		for _, addr := range addrs {
+			// Check if the address is an IPNet
+			ipNet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+
+			ip := ipNet.IP
+			// Consider only IPv4 addresses
+			if ip.To4() == nil {
+				continue
+			}
+
+			// Skip loopback and link-local addresses
+			if ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+				continue
+			}
+
+			// Check if the IP is within the Tailscale network
+			if tsNet.Contains(ip) {
 				return true, nil
 			}
 		}
 	}
+
 	return false, nil
 }
 
