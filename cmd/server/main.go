@@ -124,6 +124,29 @@ func handleClient(conn net.Conn) {
 			}
 			mutex.Unlock()
 			conn.Write([]byte("LISTED\n"))
+		} else if strings.HasPrefix(message, "INFO") {
+			// Print server information
+			tailscaleIP, err := getTailscaleIP()
+			if err != nil {
+				conn.Write([]byte("ERROR Failed to get Tailscale IP: " + err.Error() + "\n"))
+			} else {
+				conn.Write([]byte(fmt.Sprintf("INFO Tailscale IP: %s\n", tailscaleIP)))
+
+				// Print connected clients
+				mutex.Lock()
+				for _, client := range clients {
+					conn.Write([]byte(fmt.Sprintf("CLIENT %s\n", client.ID)))
+				}
+				mutex.Unlock()
+
+				// Print server commands
+				printCommands()
+				conn.Write([]byte("INFO LISTED\n"))
+			}
+		} else if strings.HasPrefix(message, "SERVERHELP") {
+			// Print server commands
+			printCommands()
+			conn.Write([]byte("SERVERHELP LISTED\n"))
 		} else {
 			conn.Write([]byte("ERROR Unknown command\n"))
 		}
@@ -183,6 +206,14 @@ func encrypt(message, key []byte) []byte {
 		ciphertext[i] = message[i] ^ key[i]
 	}
 	return ciphertext
+}
+
+func printCommands() {
+	fmt.Println("Available server commands:")
+	fmt.Println("LIST - List all connected clients")
+	fmt.Println("INFO - Print server information")
+	fmt.Println("SERVERHELP - Print this help text")
+	fmt.Println()
 }
 
 func main() {
