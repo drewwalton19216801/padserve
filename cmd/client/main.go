@@ -7,28 +7,37 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"runtime"
 	"strings"
 )
 
-// Check if the local IP address belongs to a Tailscale interface
-func tailscaleRunning() bool {
+// Check if the local IP address belongs to a Tailscale interface and is not a link-local address
+func isTailscale() (bool, error) {
+	// Determine the Tailscale interface name based on the OS
+	var ifaceName string
+	if runtime.GOOS == "windows" {
+		ifaceName = "Tailscale" // Typical interface name for Tailscale on Windows
+	} else {
+		ifaceName = "tailscale0" // Interface name on Linux
+	}
+
 	// Check if the local IP address belongs to a Tailscale interface
-	iface, err := net.InterfaceByName("tailscale0")
+	iface, err := net.InterfaceByName(ifaceName)
 	if err != nil {
-		return false
+		return false, err
 	}
 	addrs, err := iface.Addrs()
 	if err != nil {
-		return false
+		return false, err
 	}
 	for _, addr := range addrs {
-		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() && !ipnet.IP.IsLinkLocalUnicast() {
 			if ipnet.IP.To4() != nil {
-				return true
+				return true, nil
 			}
 		}
 	}
-	return false
+	return false, nil
 }
 
 // OTP encryption (XOR cipher)
@@ -112,8 +121,13 @@ func main() {
 	address := serverIP + ":12345"
 
 	// Check if the local IP address belongs to a Tailscale interface
-	if !tailscaleRunning() {
-		fmt.Println("Error: This client must be run on a Tailscale device.")
+	isTailscale, err := isTailscale()
+	if err != nil {
+		fmt.Println("Error checking local IP address:", err)
+		return
+	}
+	if !isTailscale {
+		fmt.Println("Please connect to a Tailscale network.")
 		return
 	}
 

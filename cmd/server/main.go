@@ -6,14 +6,25 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"runtime"
 	"strings"
 	"sync"
 )
 
-// getTailscaleIP function as provided
+// getTailscaleIP retrieves the IP address of the Tailscale interface.
+// It determines the interface name based on the operating system
+// and then fetches the associated IP address.
 func getTailscaleIP() (string, error) {
+	// Determine the Tailscale interface name based on the OS
+	var ifaceName string
+	if runtime.GOOS == "windows" {
+		ifaceName = "Tailscale" // Typical interface name for Tailscale on Windows
+	} else {
+		ifaceName = "tailscale0" // Interface name on Linux
+	}
+
 	// Get the IP address of the Tailscale interface
-	iface, err := net.InterfaceByName("tailscale0")
+	iface, err := net.InterfaceByName(ifaceName)
 	if err != nil {
 		return "", err
 	}
@@ -22,7 +33,9 @@ func getTailscaleIP() (string, error) {
 		return "", err
 	}
 	for _, addr := range addrs {
-		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+		// Check if the address is an IPNet, not a loopback address, and not a link-local address
+		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() && !ipnet.IP.IsLinkLocalUnicast() {
+			// Return the first IP4 address as the Tailscale IP
 			if ipnet.IP.To4() != nil {
 				return ipnet.IP.String(), nil
 			}
