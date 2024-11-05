@@ -238,10 +238,37 @@ func main() {
 					encryptedData := keyHex + "|" + ciphertextHex
 					fmt.Fprintf(conn, "SEND %s %s\n", recipientID, encryptedData)
 				}
+			} else if strings.HasPrefix(input, "HELP") || strings.HasPrefix(input, "help") {
+				printUsage(false)
+			} else if strings.HasPrefix(input, "EXIT") || strings.HasPrefix(input, "exit") {
+				fmt.Fprintf(conn, "EXIT\n")
+				fmt.Println("Exiting...")
+				return
 			} else {
-				fmt.Println("Unknown command. Use 'SEND <RecipientID|ALL> <Message>'")
+				// Send the command to the server
+				fmt.Fprintf(conn, "%s\n", input)
 			}
 			fmt.Print("> ")
 		}
 	}
+}
+
+// Help text for the client
+func printUsage(invalid bool) {
+	if invalid {
+		fmt.Println("Invalid command.")
+		printCommands()
+	} else {
+		printCommands()
+	}
+}
+
+func printCommands() {
+	fmt.Println("Available client commands:")
+	fmt.Println("SEND <RecipientID|ALL> <Message> - Send a message to a specific client or all clients")
+	fmt.Println("HELP - Print this help text")
+	fmt.Println("EXIT - Exit the program")
+	fmt.Println()
+	fmt.Println("Available server commands:")
+	fmt.Println("INFO - Print server information")
 }
