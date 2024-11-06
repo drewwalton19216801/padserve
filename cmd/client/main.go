@@ -2,13 +2,18 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strings"
@@ -166,6 +171,14 @@ func main() {
 	}
 	defer conn.Close()
 
+	// Generate ECDSA key pair for ECDH
+	clientPrivKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		fmt.Println("Error generating ECDSA key:", err)
+		return
+	}
+	clientPubKey := &clientPrivKey.PublicKey
+
 	// Register with the server
 	fmt.Fprintf(conn, "REGISTER %s\n", clientID)
 
@@ -184,7 +197,7 @@ func main() {
 		return
 	}
 
-	// Now read the public key
+	// Now read the server's public key
 	pubKeyPEM := ""
 	for {
 		line, err := reader.ReadString('\n')
@@ -202,22 +215,39 @@ func main() {
 		pubKeyPEM += line + "\n"
 	}
 
-	// Now parse the public key
+	// Parse the server's public key
 	block, _ := pem.Decode([]byte(pubKeyPEM))
-	if block == nil || block.Type != "RSA PUBLIC KEY" {
-		fmt.Println("Failed to decode public key")
+	if block == nil || block.Type != "ECDSA PUBLIC KEY" {
+		fmt.Println("Failed to decode server's public key")
 		return
 	}
-	publicKeyInterface, err := x509.ParsePKIXPublicKey(block.Bytes)
+	serverPubKeyInterface, err := x509.ParsePKIXPublicKey(block.Bytes)
 	if err != nil {
-		fmt.Println("Error parsing public key:", err)
+		fmt.Println("Error parsing server's public key:", err)
 		return
 	}
-	publicKey, ok := publicKeyInterface.(*rsa.PublicKey)
+	serverPubKey, ok := serverPubKeyInterface.(*ecdsa.PublicKey)
 	if !ok {
-		fmt.Println("Invalid public key type")
+		fmt.Println("Invalid server public key type")
 		return
 	}
+
+	// Compute shared secret
+	sharedSecret, err := computeSharedSecret(clientPrivKey, serverPubKey)
+	if err != nil {
+		fmt.Println("Error computing shared secret:", err)
+		return
+	}
+
+	// Send the client's public key to the server
+	clientPubKeyPEM, err := getPublicKeyPEM(clientPubKey)
+	if err != nil {
+		fmt.Println("Error encoding client's public key:", err)
+		return
+	}
+	fmt.Fprintf(conn, "CLIENTPUBKEY\n")
+	fmt.Fprintf(conn, "%s", clientPubKeyPEM)
+	fmt.Fprintf(conn, "END CLIENTPUBKEY\n")
 
 	fmt.Println("Connected to the server. Type your commands below:")
 	fmt.Print("> ")
@@ -269,17 +299,17 @@ func main() {
 				messageText := parts[2]
 
 				if recipientID == "ALL" {
-					// Encrypt the message using the server's public key
-					ciphertext, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, publicKey, []byte(messageText), nil)
+					// Encrypt the message using the shared secret
+					encryptedData, err := encryptAES(sharedSecret, []byte(messageText))
 					if err != nil {
 						fmt.Println("Error encrypting message:", err)
 						fmt.Print("> ")
 						continue
 					}
-					// Encode the ciphertext in hex
-					ciphertextHex := hex.EncodeToString(ciphertext)
+					// Encode the encrypted data in hex
+					encryptedDataHex := hex.EncodeToString(encryptedData)
 					// Send the encrypted message to the server
-					fmt.Fprintf(conn, "SEND ALL %s\n", ciphertextHex)
+					fmt.Fprintf(conn, "SEND ALL %s\n", encryptedDataHex)
 				} else {
 					// ... [Existing code for sending to a specific client] ...
 					// Generate OTP key
@@ -303,8 +333,6 @@ func main() {
 					encryptedData := keyHex + "|" + ciphertextHex
 					fmt.Fprintf(conn, "SEND %s %s\n", recipientID, encryptedData)
 				}
-			} else if strings.HasPrefix(input, "HELP") || strings.HasPrefix(input, "help") {
-				printUsage(false)
 			} else if strings.HasPrefix(input, "EXIT") || strings.HasPrefix(input, "exit") {
 				fmt.Fprintf(conn, "EXIT\n")
 				fmt.Println("Exiting...")
@@ -316,6 +344,44 @@ func main() {
 			fmt.Print("> ")
 		}
 	}
+}
+
+func computeSharedSecret(privKey *ecdsa.PrivateKey, pubKey *ecdsa.PublicKey) ([]byte, error) {
+	x, _ := pubKey.Curve.ScalarMult(pubKey.X, pubKey.Y, privKey.D.Bytes())
+	sharedSecret := sha256.Sum256(x.Bytes())
+	return sharedSecret[:], nil
+}
+
+func getPublicKeyPEM(pubKey *ecdsa.PublicKey) (string, error) {
+	pubASN1, err := x509.MarshalPKIXPublicKey(pubKey)
+	if err != nil {
+		return "", err
+	}
+	pubPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "ECDSA PUBLIC KEY",
+		Bytes: pubASN1,
+	})
+	return string(pubPEM), nil
+}
+
+func encryptAES(key, plaintext []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	padding := aes.BlockSize - len(plaintext)%aes.BlockSize
+	padtext := bytes.Repeat([]byte{byte(padding)}, padding)
+	plaintext = append(plaintext, padtext...)
+
+	ciphertext := make([]byte, aes.BlockSize+len(plaintext))
+	iv := ciphertext[:aes.BlockSize]
+	_, err = io.ReadFull(rand.Reader, iv)
+	if err != nil {
+		return nil, err
+	}
+	mode := cipher.NewCBCEncrypter(block, iv)
+	mode.CryptBlocks(ciphertext[aes.BlockSize:], plaintext)
+	return ciphertext, nil
 }
 
 // Help text for the client

@@ -2,8 +2,11 @@ package main
 
 import (
 	"bufio"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
@@ -15,15 +18,17 @@ import (
 )
 
 type Client struct {
-	ID   string
-	Conn net.Conn
+	ID           string
+	Conn         net.Conn
+	PublicKey    *ecdsa.PublicKey
+	SharedSecret []byte
 }
 
 var (
-	clients    = make(map[string]*Client)
-	mutex      = &sync.Mutex{}
-	privateKey *rsa.PrivateKey
-	publicKey  *rsa.PublicKey
+	clients       = make(map[string]*Client)
+	mutex         = &sync.Mutex{}
+	serverPrivKey *ecdsa.PrivateKey
+	serverPubKey  *ecdsa.PublicKey
 )
 
 // getTailscaleIP retrieves the IP address within the Tailscale network (100.64.0.0/10).
@@ -105,7 +110,7 @@ func handleClient(conn net.Conn) {
 				conn.Write([]byte("REGISTERED\n"))
 				fmt.Printf("Client registered: %s\n", clientID)
 
-				// Send the public key to the client
+				// Send the server's public key to the client
 				pubKeyPEM, err := getPublicKeyPEM()
 				if err != nil {
 					conn.Write([]byte("ERROR Generating public key\n"))
@@ -117,19 +122,70 @@ func handleClient(conn net.Conn) {
 			} else {
 				conn.Write([]byte("ERROR Invalid REGISTER command\n"))
 			}
+		} else if strings.HasPrefix(message, "CLIENTPUBKEY") {
+			// Client is sending its public key
+			pubKeyPEM := ""
+			for {
+				line, err := reader.ReadString('\n')
+				if err != nil {
+					fmt.Println("Error reading client's public key:", err)
+					return
+				}
+				line = strings.TrimSpace(line)
+				if line == "END CLIENTPUBKEY" {
+					break
+				}
+				pubKeyPEM += line + "\n"
+			}
+			// Parse client's public key
+			block, _ := pem.Decode([]byte(pubKeyPEM))
+			if block == nil || block.Type != "ECDSA PUBLIC KEY" {
+				fmt.Println("Failed to decode client's public key")
+				return
+			}
+			clientPubKey, err := x509.ParsePKIXPublicKey(block.Bytes)
+			if err != nil {
+				fmt.Println("Error parsing client's public key:", err)
+				return
+			}
+			clientECDSAPubKey, ok := clientPubKey.(*ecdsa.PublicKey)
+			if !ok {
+				fmt.Println("Invalid client's public key type")
+				return
+			}
+			// Compute shared secret
+			sharedSecret, err := computeSharedSecret(serverPrivKey, clientECDSAPubKey)
+			if err != nil {
+				fmt.Println("Error computing shared secret:", err)
+				return
+			}
+			// Store the client's public key and shared secret
+			mutex.Lock()
+			if client, exists := clients[clientID]; exists {
+				client.PublicKey = clientECDSAPubKey
+				client.SharedSecret = sharedSecret
+			}
+			mutex.Unlock()
 		} else if strings.HasPrefix(message, "SEND") {
 			parts := strings.SplitN(message, " ", 3)
 			if len(parts) == 3 {
 				recipientID := parts[1]
+				encryptedDataHex := parts[2]
 				if recipientID == "ALL" {
-					encryptedData := parts[2]
-					// Decrypt the message using the server's private key
-					ciphertext, err := hex.DecodeString(encryptedData)
+					// Decrypt the message using the shared secret
+					mutex.Lock()
+					client := clients[clientID]
+					mutex.Unlock()
+					if client == nil || client.SharedSecret == nil {
+						conn.Write([]byte("ERROR Shared secret not established\n"))
+						continue
+					}
+					encryptedData, err := hex.DecodeString(encryptedDataHex)
 					if err != nil {
 						conn.Write([]byte("ERROR Invalid encrypted data\n"))
 						continue
 					}
-					plaintext, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, privateKey, ciphertext, nil)
+					plaintext, err := decryptAES(client.SharedSecret, encryptedData)
 					if err != nil {
 						conn.Write([]byte("ERROR Decryption failed\n"))
 						continue
@@ -138,8 +194,8 @@ func handleClient(conn net.Conn) {
 					handleBroadcast(clientID, string(plaintext))
 					conn.Write([]byte("BROADCAST SENT\n"))
 				} else {
-					encryptedData := parts[2]
-					sendMessageToClient(clientID, recipientID, encryptedData)
+					// Existing code for sending to a specific client
+					sendMessageToClient(clientID, recipientID, encryptedDataHex)
 				}
 			} else {
 				conn.Write([]byte("ERROR Invalid SEND command\n"))
@@ -228,16 +284,45 @@ func handleBroadcast(senderID, messageText string) {
 	}
 }
 
+func computeSharedSecret(privKey *ecdsa.PrivateKey, pubKey *ecdsa.PublicKey) ([]byte, error) {
+	x, _ := pubKey.Curve.ScalarMult(pubKey.X, pubKey.Y, privKey.D.Bytes())
+	sharedSecret := sha256.Sum256(x.Bytes())
+	return sharedSecret[:], nil
+}
+
 func getPublicKeyPEM() (string, error) {
-	pubASN1, err := x509.MarshalPKIXPublicKey(publicKey)
+	pubASN1, err := x509.MarshalPKIXPublicKey(serverPubKey)
 	if err != nil {
 		return "", err
 	}
 	pubPEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PUBLIC KEY",
+		Type:  "ECDSA PUBLIC KEY",
 		Bytes: pubASN1,
 	})
 	return string(pubPEM), nil
+}
+
+func decryptAES(key, ciphertext []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	if len(ciphertext) < aes.BlockSize {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
+	iv := ciphertext[:aes.BlockSize]
+	ciphertext = ciphertext[aes.BlockSize:]
+
+	decrypted := make([]byte, len(ciphertext))
+	mode := cipher.NewCBCDecrypter(block, iv)
+	mode.CryptBlocks(decrypted, ciphertext)
+
+	// Remove padding
+	padLen := int(decrypted[len(decrypted)-1])
+	if padLen > len(decrypted) {
+		return nil, fmt.Errorf("invalid padding")
+	}
+	return decrypted[:len(decrypted)-padLen], nil
 }
 
 func encrypt(message, key []byte) []byte {
@@ -261,12 +346,17 @@ func printServerCommands() string {
 
 func main() {
 	var err error
-	privateKey, err = rsa.GenerateKey(rand.Reader, 2048)
+	// Generate ECDSA key pair for ECDH
+	serverPrivKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		fmt.Println("Error generating RSA key:", err)
+		fmt.Println("Error generating ECDSA key:", err)
 		return
 	}
-	publicKey = &privateKey.PublicKey
+	serverPubKey = &serverPrivKey.PublicKey
+
+	// Inform that we have generated the key
+	fmt.Println("Server generated public key:")
+	fmt.Println(serverPubKey)
 
 	// Use getTailscaleIP to get the Tailscale IP address
 	ip, err := getTailscaleIP()
