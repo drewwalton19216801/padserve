@@ -3,11 +3,27 @@ package main
 import (
 	"bufio"
 	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
+	"encoding/pem"
 	"fmt"
 	"net"
 	"strings"
 	"sync"
+)
+
+type Client struct {
+	ID   string
+	Conn net.Conn
+}
+
+var (
+	clients    = make(map[string]*Client)
+	mutex      = &sync.Mutex{}
+	privateKey *rsa.PrivateKey
+	publicKey  *rsa.PublicKey
 )
 
 // getTailscaleIP retrieves the IP address within the Tailscale network (100.64.0.0/10).
@@ -59,16 +75,6 @@ func getTailscaleIP() (string, error) {
 	return "", fmt.Errorf("no Tailscale IP address found")
 }
 
-type Client struct {
-	ID   string
-	Conn net.Conn
-}
-
-var (
-	clients = make(map[string]*Client)
-	mutex   = &sync.Mutex{}
-)
-
 func handleClient(conn net.Conn) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
@@ -98,6 +104,16 @@ func handleClient(conn net.Conn) {
 				mutex.Unlock()
 				conn.Write([]byte("REGISTERED\n"))
 				fmt.Printf("Client registered: %s\n", clientID)
+
+				// Send the public key to the client
+				pubKeyPEM, err := getPublicKeyPEM()
+				if err != nil {
+					conn.Write([]byte("ERROR Generating public key\n"))
+				} else {
+					conn.Write([]byte("PUBLICKEY\n"))
+					conn.Write([]byte(pubKeyPEM))
+					conn.Write([]byte("END PUBLICKEY\n"))
+				}
 			} else {
 				conn.Write([]byte("ERROR Invalid REGISTER command\n"))
 			}
@@ -105,12 +121,24 @@ func handleClient(conn net.Conn) {
 			parts := strings.SplitN(message, " ", 3)
 			if len(parts) == 3 {
 				recipientID := parts[1]
-				encryptedData := parts[2]
 				if recipientID == "ALL" {
-					// Server handles broadcast
-					handleBroadcast(clientID, encryptedData)
+					encryptedData := parts[2]
+					// Decrypt the message using the server's private key
+					ciphertext, err := hex.DecodeString(encryptedData)
+					if err != nil {
+						conn.Write([]byte("ERROR Invalid encrypted data\n"))
+						continue
+					}
+					plaintext, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, privateKey, ciphertext, nil)
+					if err != nil {
+						conn.Write([]byte("ERROR Decryption failed\n"))
+						continue
+					}
+					// Now handle the broadcast with the plaintext message
+					handleBroadcast(clientID, string(plaintext))
 					conn.Write([]byte("BROADCAST SENT\n"))
 				} else {
+					encryptedData := parts[2]
 					sendMessageToClient(clientID, recipientID, encryptedData)
 				}
 			} else {
@@ -200,6 +228,18 @@ func handleBroadcast(senderID, messageText string) {
 	}
 }
 
+func getPublicKeyPEM() (string, error) {
+	pubASN1, err := x509.MarshalPKIXPublicKey(publicKey)
+	if err != nil {
+		return "", err
+	}
+	pubPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PUBLIC KEY",
+		Bytes: pubASN1,
+	})
+	return string(pubPEM), nil
+}
+
 func encrypt(message, key []byte) []byte {
 	ciphertext := make([]byte, len(message))
 	for i := range message {
@@ -220,6 +260,14 @@ func printServerCommands() string {
 }
 
 func main() {
+	var err error
+	privateKey, err = rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		fmt.Println("Error generating RSA key:", err)
+		return
+	}
+	publicKey = &privateKey.PublicKey
+
 	// Use getTailscaleIP to get the Tailscale IP address
 	ip, err := getTailscaleIP()
 	if err != nil {

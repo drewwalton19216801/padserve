@@ -3,7 +3,11 @@ package main
 import (
 	"bufio"
 	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
+	"encoding/pem"
 	"fmt"
 	"net"
 	"os"
@@ -164,6 +168,57 @@ func main() {
 
 	// Register with the server
 	fmt.Fprintf(conn, "REGISTER %s\n", clientID)
+
+	// Read server response and public key
+	reader := bufio.NewReader(conn)
+
+	// Wait for "REGISTERED" response
+	response, err := reader.ReadString('\n')
+	if err != nil {
+		fmt.Println("Error reading server response:", err)
+		return
+	}
+	response = strings.TrimSpace(response)
+	if response != "REGISTERED" {
+		fmt.Println("Failed to register with server:", response)
+		return
+	}
+
+	// Now read the public key
+	pubKeyPEM := ""
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			fmt.Println("Error reading public key from server:", err)
+			return
+		}
+		line = strings.TrimSpace(line)
+		if line == "END PUBLICKEY" {
+			break
+		}
+		if line == "PUBLICKEY" {
+			continue
+		}
+		pubKeyPEM += line + "\n"
+	}
+
+	// Now parse the public key
+	block, _ := pem.Decode([]byte(pubKeyPEM))
+	if block == nil || block.Type != "RSA PUBLIC KEY" {
+		fmt.Println("Failed to decode public key")
+		return
+	}
+	publicKeyInterface, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		fmt.Println("Error parsing public key:", err)
+		return
+	}
+	publicKey, ok := publicKeyInterface.(*rsa.PublicKey)
+	if !ok {
+		fmt.Println("Invalid public key type")
+		return
+	}
+
 	fmt.Println("Connected to the server. Type your commands below:")
 	fmt.Print("> ")
 
@@ -214,9 +269,19 @@ func main() {
 				messageText := parts[2]
 
 				if recipientID == "ALL" {
-					// Send plaintext to server for broadcast
-					fmt.Fprintf(conn, "SEND ALL %s\n", messageText)
+					// Encrypt the message using the server's public key
+					ciphertext, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, publicKey, []byte(messageText), nil)
+					if err != nil {
+						fmt.Println("Error encrypting message:", err)
+						fmt.Print("> ")
+						continue
+					}
+					// Encode the ciphertext in hex
+					ciphertextHex := hex.EncodeToString(ciphertext)
+					// Send the encrypted message to the server
+					fmt.Fprintf(conn, "SEND ALL %s\n", ciphertextHex)
 				} else {
+					// ... [Existing code for sending to a specific client] ...
 					// Generate OTP key
 					key := make([]byte, len(messageText))
 					_, err := rand.Read(key)
