@@ -5,13 +5,10 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/ecdsa"
-	"crypto/elliptic"
+	"crypto/ecdh"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/x509"
 	"encoding/hex"
-	"encoding/pem"
 	"fmt"
 	"io"
 	"net"
@@ -171,13 +168,13 @@ func main() {
 	}
 	defer conn.Close()
 
-	// Generate ECDSA key pair for ECDH
-	clientPrivKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	// Generate ECDH key pair
+	clientPrivKey, err := ecdh.P256().GenerateKey(rand.Reader)
 	if err != nil {
-		fmt.Println("Error generating ECDSA key:", err)
+		fmt.Println("Error generating ECDH key:", err)
 		return
 	}
-	clientPubKey := &clientPrivKey.PublicKey
+	clientPubKey := clientPrivKey.PublicKey()
 
 	// Register with the server
 	fmt.Fprintf(conn, "REGISTER %s\n", clientID)
@@ -198,7 +195,7 @@ func main() {
 	}
 
 	// Now read the server's public key
-	pubKeyPEM := ""
+	pubKeyHex := ""
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
@@ -212,41 +209,34 @@ func main() {
 		if line == "PUBLICKEY" {
 			continue
 		}
-		pubKeyPEM += line + "\n"
+		pubKeyHex = line
 	}
 
 	// Parse the server's public key
-	block, _ := pem.Decode([]byte(pubKeyPEM))
-	if block == nil || block.Type != "ECDSA PUBLIC KEY" {
-		fmt.Println("Failed to decode server's public key")
-		return
-	}
-	serverPubKeyInterface, err := x509.ParsePKIXPublicKey(block.Bytes)
+	serverPubKeyBytes, err := hex.DecodeString(pubKeyHex)
 	if err != nil {
-		fmt.Println("Error parsing server's public key:", err)
+		fmt.Println("Error decoding server's public key:", err)
 		return
 	}
-	serverPubKey, ok := serverPubKeyInterface.(*ecdsa.PublicKey)
-	if !ok {
-		fmt.Println("Invalid server public key type")
+	serverPubKey, err := ecdh.P256().NewPublicKey(serverPubKeyBytes)
+	if err != nil {
+		fmt.Println("Error creating server's public key:", err)
 		return
 	}
 
 	// Compute shared secret
-	sharedSecret, err := computeSharedSecret(clientPrivKey, serverPubKey)
+	sharedSecret, err := clientPrivKey.ECDH(serverPubKey)
 	if err != nil {
 		fmt.Println("Error computing shared secret:", err)
 		return
 	}
+	// Hash the shared secret to derive a key
+	hashedSecret := sha256.Sum256(sharedSecret)
 
 	// Send the client's public key to the server
-	clientPubKeyPEM, err := getPublicKeyPEM(clientPubKey)
-	if err != nil {
-		fmt.Println("Error encoding client's public key:", err)
-		return
-	}
+	clientPubKeyBytes := clientPubKey.Bytes()
 	fmt.Fprintf(conn, "CLIENTPUBKEY\n")
-	fmt.Fprintf(conn, "%s", clientPubKeyPEM)
+	fmt.Fprintf(conn, "%s\n", hex.EncodeToString(clientPubKeyBytes))
 	fmt.Fprintf(conn, "END CLIENTPUBKEY\n")
 
 	fmt.Println("Connected to the server. Type your commands below:")
@@ -300,7 +290,7 @@ func main() {
 
 				if recipientID == "ALL" {
 					// Encrypt the message using the shared secret
-					encryptedData, err := encryptAES(sharedSecret, []byte(messageText))
+					encryptedData, err := encryptAES(hashedSecret[:], []byte(messageText))
 					if err != nil {
 						fmt.Println("Error encrypting message:", err)
 						fmt.Print("> ")
@@ -311,7 +301,6 @@ func main() {
 					// Send the encrypted message to the server
 					fmt.Fprintf(conn, "SEND ALL %s\n", encryptedDataHex)
 				} else {
-					// ... [Existing code for sending to a specific client] ...
 					// Generate OTP key
 					key := make([]byte, len(messageText))
 					_, err := rand.Read(key)
@@ -333,6 +322,9 @@ func main() {
 					encryptedData := keyHex + "|" + ciphertextHex
 					fmt.Fprintf(conn, "SEND %s %s\n", recipientID, encryptedData)
 				}
+			} else if strings.HasPrefix(input, "HELP") || strings.HasPrefix(input, "help") {
+				// Handle HELP command
+				printUsage(false)
 			} else if strings.HasPrefix(input, "EXIT") || strings.HasPrefix(input, "exit") {
 				fmt.Fprintf(conn, "EXIT\n")
 				fmt.Println("Exiting...")
@@ -344,24 +336,6 @@ func main() {
 			fmt.Print("> ")
 		}
 	}
-}
-
-func computeSharedSecret(privKey *ecdsa.PrivateKey, pubKey *ecdsa.PublicKey) ([]byte, error) {
-	x, _ := pubKey.Curve.ScalarMult(pubKey.X, pubKey.Y, privKey.D.Bytes())
-	sharedSecret := sha256.Sum256(x.Bytes())
-	return sharedSecret[:], nil
-}
-
-func getPublicKeyPEM(pubKey *ecdsa.PublicKey) (string, error) {
-	pubASN1, err := x509.MarshalPKIXPublicKey(pubKey)
-	if err != nil {
-		return "", err
-	}
-	pubPEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "ECDSA PUBLIC KEY",
-		Bytes: pubASN1,
-	})
-	return string(pubPEM), nil
 }
 
 func encryptAES(key, plaintext []byte) ([]byte, error) {

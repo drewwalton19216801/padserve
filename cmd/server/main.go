@@ -4,13 +4,10 @@ import (
 	"bufio"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/ecdsa"
-	"crypto/elliptic"
+	"crypto/ecdh"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/x509"
 	"encoding/hex"
-	"encoding/pem"
 	"fmt"
 	"net"
 	"strings"
@@ -20,15 +17,15 @@ import (
 type Client struct {
 	ID           string
 	Conn         net.Conn
-	PublicKey    *ecdsa.PublicKey
+	PublicKey    *ecdh.PublicKey
 	SharedSecret []byte
 }
 
 var (
 	clients       = make(map[string]*Client)
 	mutex         = &sync.Mutex{}
-	serverPrivKey *ecdsa.PrivateKey
-	serverPubKey  *ecdsa.PublicKey
+	serverPrivKey *ecdh.PrivateKey
+	serverPubKey  *ecdh.PublicKey
 )
 
 // getTailscaleIP retrieves the IP address within the Tailscale network (100.64.0.0/10).
@@ -111,20 +108,16 @@ func handleClient(conn net.Conn) {
 				fmt.Printf("Client registered: %s\n", clientID)
 
 				// Send the server's public key to the client
-				pubKeyPEM, err := getPublicKeyPEM()
-				if err != nil {
-					conn.Write([]byte("ERROR Generating public key\n"))
-				} else {
-					conn.Write([]byte("PUBLICKEY\n"))
-					conn.Write([]byte(pubKeyPEM))
-					conn.Write([]byte("END PUBLICKEY\n"))
-				}
+				pubKeyBytes := serverPubKey.Bytes()
+				conn.Write([]byte("PUBLICKEY\n"))
+				conn.Write([]byte(hex.EncodeToString(pubKeyBytes) + "\n"))
+				conn.Write([]byte("END PUBLICKEY\n"))
 			} else {
 				conn.Write([]byte("ERROR Invalid REGISTER command\n"))
 			}
 		} else if strings.HasPrefix(message, "CLIENTPUBKEY") {
 			// Client is sending its public key
-			pubKeyPEM := ""
+			pubKeyHex := ""
 			for {
 				line, err := reader.ReadString('\n')
 				if err != nil {
@@ -135,35 +128,34 @@ func handleClient(conn net.Conn) {
 				if line == "END CLIENTPUBKEY" {
 					break
 				}
-				pubKeyPEM += line + "\n"
+				pubKeyHex += line
 			}
-			// Parse client's public key
-			block, _ := pem.Decode([]byte(pubKeyPEM))
-			if block == nil || block.Type != "ECDSA PUBLIC KEY" {
-				fmt.Println("Failed to decode client's public key")
-				return
-			}
-			clientPubKey, err := x509.ParsePKIXPublicKey(block.Bytes)
+
+			clientPubKeyBytes, err := hex.DecodeString(pubKeyHex)
 			if err != nil {
-				fmt.Println("Error parsing client's public key:", err)
+				fmt.Println("Error decoding client's public key:", err)
 				return
 			}
-			clientECDSAPubKey, ok := clientPubKey.(*ecdsa.PublicKey)
-			if !ok {
-				fmt.Println("Invalid client's public key type")
+			clientPubKey, err := ecdh.P256().NewPublicKey(clientPubKeyBytes)
+			if err != nil {
+				fmt.Println("Error creating client's public key:", err)
 				return
 			}
+
 			// Compute shared secret
-			sharedSecret, err := computeSharedSecret(serverPrivKey, clientECDSAPubKey)
+			sharedSecret, err := serverPrivKey.ECDH(clientPubKey)
 			if err != nil {
 				fmt.Println("Error computing shared secret:", err)
 				return
 			}
+			// Hash the shared secret to derive a key
+			hashedSecret := sha256.Sum256(sharedSecret)
+
 			// Store the client's public key and shared secret
 			mutex.Lock()
 			if client, exists := clients[clientID]; exists {
-				client.PublicKey = clientECDSAPubKey
-				client.SharedSecret = sharedSecret
+				client.PublicKey = clientPubKey
+				client.SharedSecret = hashedSecret[:]
 			}
 			mutex.Unlock()
 		} else if strings.HasPrefix(message, "SEND") {
@@ -194,7 +186,6 @@ func handleClient(conn net.Conn) {
 					handleBroadcast(clientID, string(plaintext))
 					conn.Write([]byte("BROADCAST SENT\n"))
 				} else {
-					// Existing code for sending to a specific client
 					sendMessageToClient(clientID, recipientID, encryptedDataHex)
 				}
 			} else {
@@ -232,7 +223,7 @@ func handleClient(conn net.Conn) {
 			conn.Write([]byte(printServerCommands()))
 			conn.Write([]byte("SERVERHELP LISTED\n"))
 		} else {
-			conn.Write([]byte("ERROR Unknown command\n"))
+			conn.Write([]byte("ERROR Unknown command: " + message + "\n"))
 		}
 	}
 }
@@ -284,24 +275,6 @@ func handleBroadcast(senderID, messageText string) {
 	}
 }
 
-func computeSharedSecret(privKey *ecdsa.PrivateKey, pubKey *ecdsa.PublicKey) ([]byte, error) {
-	x, _ := pubKey.Curve.ScalarMult(pubKey.X, pubKey.Y, privKey.D.Bytes())
-	sharedSecret := sha256.Sum256(x.Bytes())
-	return sharedSecret[:], nil
-}
-
-func getPublicKeyPEM() (string, error) {
-	pubASN1, err := x509.MarshalPKIXPublicKey(serverPubKey)
-	if err != nil {
-		return "", err
-	}
-	pubPEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "ECDSA PUBLIC KEY",
-		Bytes: pubASN1,
-	})
-	return string(pubPEM), nil
-}
-
 func decryptAES(key, ciphertext []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -346,17 +319,13 @@ func printServerCommands() string {
 
 func main() {
 	var err error
-	// Generate ECDSA key pair for ECDH
-	serverPrivKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	// Generate ECDH key pair
+	serverPrivKey, err = ecdh.P256().GenerateKey(rand.Reader)
 	if err != nil {
-		fmt.Println("Error generating ECDSA key:", err)
+		fmt.Println("Error generating ECDH key:", err)
 		return
 	}
-	serverPubKey = &serverPrivKey.PublicKey
-
-	// Inform that we have generated the key
-	fmt.Println("Server generated public key:")
-	fmt.Println(serverPubKey)
+	serverPubKey = serverPrivKey.PublicKey()
 
 	// Use getTailscaleIP to get the Tailscale IP address
 	ip, err := getTailscaleIP()
