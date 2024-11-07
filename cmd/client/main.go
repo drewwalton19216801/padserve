@@ -1,3 +1,13 @@
+// Package main implements a client for a secure TCP server that communicates over a Tailscale network.
+// The client registers with the server, performs an ECDH key exchange to establish a shared secret,
+// and allows the user to send encrypted messages to other clients or broadcast messages to all clients.
+//
+// Usage:
+//
+//	go run client.go <YourID> <TailscaleServer>
+//
+// Replace <YourID> with your chosen client identifier and <TailscaleServer> with the server's
+// Tailscale IP address or hostname. Ensure that you are connected to the Tailscale network before running the client.
 package main
 
 import (
@@ -70,7 +80,7 @@ func isTailscale() (bool, error) {
 	return false, nil
 }
 
-// OTP encryption (XOR cipher)
+// encrypt performs OTP encryption (XOR cipher) on the message using the provided key.
 func encrypt(message, key []byte) []byte {
 	ciphertext := make([]byte, len(message))
 	for i := range message {
@@ -79,6 +89,7 @@ func encrypt(message, key []byte) []byte {
 	return ciphertext
 }
 
+// readMessages continuously reads messages from the server and processes them.
 func readMessages(conn net.Conn, done chan bool) {
 	reader := bufio.NewReader(conn)
 	for {
@@ -143,7 +154,7 @@ func readMessages(conn net.Conn, done chan bool) {
 
 func main() {
 	if len(os.Args) < 3 {
-		fmt.Println("Usage: go run client.go <YourID> <ServerTailscaleIP>")
+		fmt.Println("Usage: go run client.go <YourID> <TailscaleServer>")
 		return
 	}
 	clientID := os.Args[1]
@@ -338,6 +349,7 @@ func main() {
 	}
 }
 
+// encryptAES encrypts the plaintext using AES encryption with the provided key.
 func encryptAES(key, plaintext []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -358,7 +370,7 @@ func encryptAES(key, plaintext []byte) ([]byte, error) {
 	return ciphertext, nil
 }
 
-// Help text for the client
+// printUsage displays help text for the client commands.
 func printUsage(invalid bool) {
 	if invalid {
 		fmt.Println("Invalid command.")
@@ -368,6 +380,7 @@ func printUsage(invalid bool) {
 	}
 }
 
+// printCommands prints the list of available client and server commands.
 func printCommands() {
 	fmt.Println("Available client commands:")
 	fmt.Println("SEND <RecipientID|ALL> <Message> - Send a message to a specific client or all clients")
