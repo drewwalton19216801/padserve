@@ -32,7 +32,7 @@ type Client struct {
 
 var (
 	clients       = make(map[string]*Client) // clients stores the connected clients indexed by their ID.
-	rwMutex       = &sync.RWMutex{}          // mutex synchronizes access to the clients map.
+	clientMutex   = sync.RWMutex{}           // mutex synchronizes access to the clients map.
 	serverPrivKey *ecdh.PrivateKey           // serverPrivKey is the server's ECDH private key.
 	serverPubKey  *ecdh.PublicKey            // serverPubKey is the server's ECDH public key.
 )
@@ -97,9 +97,9 @@ func handleClient(conn net.Conn) {
 		if err != nil {
 			fmt.Printf("Client %s disconnected.\n", clientID)
 			if clientID != "" {
-				rwMutex.Lock()
+				clientMutex.Lock()
 				delete(clients, clientID)
-				rwMutex.Unlock()
+				clientMutex.Unlock()
 			}
 			return
 		}
@@ -111,9 +111,9 @@ func handleClient(conn net.Conn) {
 			parts := strings.Split(message, " ")
 			if len(parts) == 2 {
 				// Ensure the client is not already registered
-				rwMutex.RLock()
+				clientMutex.RLock()
 				_, ok := clients[parts[1]]
-				rwMutex.RUnlock()
+				clientMutex.RUnlock()
 
 				if ok {
 					conn.Write([]byte("ERROR Client name already registered\n"))
@@ -123,9 +123,9 @@ func handleClient(conn net.Conn) {
 
 				// Good to go, register the client
 				clientID = parts[1]
-				rwMutex.Lock()
+				clientMutex.Lock()
 				clients[clientID] = &Client{ID: clientID, Conn: conn}
-				rwMutex.Unlock()
+				clientMutex.Unlock()
 				conn.Write([]byte("REGISTERED\n"))
 				fmt.Printf("Client registered: %s\n", clientID)
 
@@ -174,12 +174,12 @@ func handleClient(conn net.Conn) {
 			hashedSecret := sha256.Sum256(sharedSecret)
 
 			// Store the client's public key and shared secret
-			rwMutex.Lock()
+			clientMutex.Lock()
 			if client, exists := clients[clientID]; exists {
 				client.PublicKey = clientPubKey
 				client.SharedSecret = hashedSecret[:]
 			}
-			rwMutex.Unlock()
+			clientMutex.Unlock()
 		} else if strings.HasPrefix(message, "SEND") {
 			parts := strings.SplitN(message, " ", 3)
 			if len(parts) == 3 {
@@ -187,9 +187,9 @@ func handleClient(conn net.Conn) {
 				encryptedDataHex := parts[2]
 				if recipientID == "ALL" {
 					// Decrypt the message using the shared secret
-					rwMutex.RLock()
+					clientMutex.RLock()
 					client := clients[clientID]
-					rwMutex.RUnlock()
+					clientMutex.RUnlock()
 					if client == nil || client.SharedSecret == nil {
 						conn.Write([]byte("ERROR Shared secret not established\n"))
 						continue
@@ -215,11 +215,11 @@ func handleClient(conn net.Conn) {
 			}
 		} else if strings.HasPrefix(message, "LIST") {
 			// List all connected clients
-			rwMutex.RLock()
+			clientMutex.RLock()
 			for _, client := range clients {
 				conn.Write([]byte(fmt.Sprintf("CLIENT %s\n", client.ID)))
 			}
-			rwMutex.RUnlock()
+			clientMutex.RUnlock()
 			conn.Write([]byte("LISTED\n"))
 		} else if strings.HasPrefix(message, "INFO") {
 			// Print server information
@@ -230,11 +230,11 @@ func handleClient(conn net.Conn) {
 				conn.Write([]byte(fmt.Sprintf("INFO Tailscale IP: %s\n", tailscaleIP)))
 
 				// Print connected clients
-				rwMutex.RLock()
+				clientMutex.RLock()
 				for _, client := range clients {
 					conn.Write([]byte(fmt.Sprintf("CLIENT %s\n", client.ID)))
 				}
-				rwMutex.RUnlock()
+				clientMutex.RUnlock()
 
 				// Print server commands
 				conn.Write([]byte(printServerCommands()))
@@ -252,15 +252,15 @@ func handleClient(conn net.Conn) {
 
 // sendMessageToClient sends an encrypted message from the sender to the specified recipient.
 func sendMessageToClient(senderID, recipientID, encryptedData string) {
-	rwMutex.RLock()
+	clientMutex.RLock()
 	recipient, exists := clients[recipientID]
-	rwMutex.RUnlock()
+	clientMutex.RUnlock()
 	if exists {
 		recipient.Conn.Write([]byte(fmt.Sprintf("MESSAGE from %s: %s\n", senderID, encryptedData)))
 	} else {
-		rwMutex.RLock()
+		clientMutex.RLock()
 		sender, exists := clients[senderID]
-		rwMutex.RUnlock()
+		clientMutex.RUnlock()
 		if exists {
 			sender.Conn.Write([]byte("ERROR Recipient not found\n"))
 		}
@@ -269,14 +269,14 @@ func sendMessageToClient(senderID, recipientID, encryptedData string) {
 
 // handleBroadcast sends a broadcast message from the sender to all other connected clients.
 func handleBroadcast(senderID, messageText string) {
-	rwMutex.RLock()
+	clientMutex.RLock()
 	recipients := make([]*Client, 0, len(clients))
 	for id, client := range clients {
 		if id != senderID {
 			recipients = append(recipients, client)
 		}
 	}
-	rwMutex.RUnlock()
+	clientMutex.RUnlock()
 
 	// For each recipient, generate a unique OTP key and encrypt the message
 	for _, recipient := range recipients {
