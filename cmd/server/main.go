@@ -1,3 +1,11 @@
+// Package main implements a secure TCP server that communicates over a Tailscale network.
+// The server uses ECDH key exchange to establish shared secrets with clients for encrypted communication.
+// Clients can register with the server, exchange public keys, and send encrypted messages to other clients.
+// The server supports commands such as REGISTER, SEND, LIST, INFO, and SERVERHELP.
+//
+// To run the server, ensure that you have Tailscale installed and configured.
+// The server will automatically detect its Tailscale IP address and listen on port 12345.
+// Clients can connect to the server using the Tailscale IP address and communicate using the defined protocol.
 package main
 
 import (
@@ -14,6 +22,7 @@ import (
 	"sync"
 )
 
+// Client represents a connected client with its associated ID, connection, public key, and shared secret.
 type Client struct {
 	ID           string
 	Conn         net.Conn
@@ -22,10 +31,10 @@ type Client struct {
 }
 
 var (
-	clients       = make(map[string]*Client)
-	mutex         = &sync.Mutex{}
-	serverPrivKey *ecdh.PrivateKey
-	serverPubKey  *ecdh.PublicKey
+	clients       = make(map[string]*Client) // clients stores the connected clients indexed by their ID.
+	mutex         = &sync.Mutex{}            // mutex synchronizes access to the clients map.
+	serverPrivKey *ecdh.PrivateKey           // serverPrivKey is the server's ECDH private key.
+	serverPubKey  *ecdh.PublicKey            // serverPubKey is the server's ECDH public key.
 )
 
 // getTailscaleIP retrieves the IP address within the Tailscale network (100.64.0.0/10).
@@ -77,6 +86,7 @@ func getTailscaleIP() (string, error) {
 	return "", fmt.Errorf("no Tailscale IP address found")
 }
 
+// handleClient handles communication with a connected client over the given net.Conn.
 func handleClient(conn net.Conn) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
@@ -228,6 +238,7 @@ func handleClient(conn net.Conn) {
 	}
 }
 
+// sendMessageToClient sends an encrypted message from the sender to the specified recipient.
 func sendMessageToClient(senderID, recipientID, encryptedData string) {
 	mutex.Lock()
 	recipient, exists := clients[recipientID]
@@ -242,6 +253,7 @@ func sendMessageToClient(senderID, recipientID, encryptedData string) {
 	}
 }
 
+// handleBroadcast sends a broadcast message from the sender to all other connected clients.
 func handleBroadcast(senderID, messageText string) {
 	mutex.Lock()
 	recipients := make([]*Client, 0, len(clients))
@@ -275,6 +287,7 @@ func handleBroadcast(senderID, messageText string) {
 	}
 }
 
+// decryptAES decrypts the given ciphertext using AES encryption with the provided key.
 func decryptAES(key, ciphertext []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -298,6 +311,7 @@ func decryptAES(key, ciphertext []byte) ([]byte, error) {
 	return decrypted[:len(decrypted)-padLen], nil
 }
 
+// encrypt performs a simple XOR encryption of the message using the provided key.
 func encrypt(message, key []byte) []byte {
 	ciphertext := make([]byte, len(message))
 	for i := range message {
@@ -306,6 +320,7 @@ func encrypt(message, key []byte) []byte {
 	return ciphertext
 }
 
+// printServerCommands returns a string containing the list of available server commands.
 func printServerCommands() string {
 	var helptext string
 
@@ -317,6 +332,7 @@ func printServerCommands() string {
 	return helptext
 }
 
+// main is the entry point of the server program.
 func main() {
 	var err error
 	// Generate ECDH key pair
