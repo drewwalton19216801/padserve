@@ -41,6 +41,7 @@ Once connected, the client can use these commands:
  - `SEND <RecipientID|ALL> <Message>`: Send an encrypted message to a specific client or all clients.
  - `LIST`: List all clients connected to the server.
  - `HELP`: Display available client commands.
+ - `SERVERHELP`: Display server help text.
  - `EXIT`: Disconnect from the server and exit the client.
 
 ## Example Usage
