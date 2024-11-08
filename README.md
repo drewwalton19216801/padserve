@@ -20,7 +20,7 @@ Clone the repository and navigate to the project directory:
 The server automatically detects its Tailscale IP and listens on port `12345`.
 
  1. Ensure Tailscale is active and configured.
- 2. Start the server with: `go run cmd/server`
+ 2. Start the server with: `go run ./cmd/server`
  3. The server will display its Tailscale IP and listen for incoming client connections.
 
 ### Server Commands
@@ -33,7 +33,7 @@ The server supports the following commands sent from clients:
 ## Running the Client
 
  1. Connect to the Tailscale network and obtain the server’s Tailscale IP.
- 2. Run the client with: `go run cmd/client <YourID> <TailscaleServerAddress>`, replacing `<YourID>` with your chosen identifier and `<TailscaleServerAddress>` with the server's IP or hostname on the Tailscale network.
+ 2. Run the client in another terminal with: `go run ./cmd/client <YourID> <TailscaleServerAddress>`, replacing `<YourID>` with your chosen identifier and `<TailscaleServerAddress>` with the server's IP or hostname on the Tailscale network.
 
 ### Client Commands
 Once connected, the client can use these commands:
