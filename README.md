@@ -63,6 +63,7 @@ The first client to connect to the server is given access to Operator commands:
  - Ensure that all clients are on the same Tailscale network.
  - Each client should register with a unique identifier (the server will reject duplicate identifiers).
  - The server supports encrypted messaging; however, it is limited to the Tailscale network.
+ - Both the client and server are cross-platform and have been tested on macOS, Windows, Linux, and FreeBSD.
 
 ## Security Considerations
 
