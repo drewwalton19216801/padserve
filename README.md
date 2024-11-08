@@ -52,8 +52,8 @@ The first client to connect to the server is given access to Operator commands:
 
 ## Example Usage
 
- 1. Start the server: `go run cmd/server`
- 2. Start at least two clients: `go run cmd/client Someone 100.64.x.x`, replacing `Someone` with the client's chosen ID and `100.64.x.x` with the server's Tailscale IP address or hostname.
+ 1. Start the server: `go run ./cmd/server`
+ 2. Start at least two clients: `go run ./cmd/client Someone 100.64.x.x`, replacing `Someone` with the client's chosen ID and `100.64.x.x` with the server's Tailscale IP address or hostname.
  3. List connected clients: `LIST`
  4. Send a direct message: `SEND Bob Hello, Bob!`, replacing `Bob` with the client ID of another client.
  5. Send a broadcast message: `SEND ALL Hello, everyone!` 
