@@ -110,6 +110,14 @@ func handleClient(conn net.Conn) {
 		if strings.HasPrefix(message, "REGISTER") {
 			parts := strings.Split(message, " ")
 			if len(parts) == 2 {
+				// Ensure the client is not already registered
+				if _, ok := clients[parts[1]]; ok {
+					conn.Write([]byte("ERROR Client name already registered\n"))
+					fmt.Printf("Client %s is already registered.\n", parts[1])
+					continue
+				}
+
+				// Good to go, register the client
 				clientID = parts[1]
 				mutex.Lock()
 				clients[clientID] = &Client{ID: clientID, Conn: conn}
