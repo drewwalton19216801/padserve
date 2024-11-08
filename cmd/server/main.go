@@ -35,7 +35,56 @@ var (
 	clientMutex   = sync.RWMutex{}           // mutex synchronizes access to the clients map.
 	serverPrivKey *ecdh.PrivateKey           // serverPrivKey is the server's ECDH private key.
 	serverPubKey  *ecdh.PublicKey            // serverPubKey is the server's ECDH public key.
+	operatorID    string                     // Store the operator's ID
+	operatorMutex = sync.RWMutex{}           // Mutex for operator operations
 )
+
+// isOperator returns true if the provided client ID is the operator's ID, false otherwise.
+func isOperator(clientID string) bool {
+	operatorMutex.RLock()
+	defer operatorMutex.RUnlock()
+	return clientID == operatorID
+}
+
+// handleOperatorCommand processes an operator command and takes the appropriate action.
+//
+// The following commands are supported:
+//
+// - KICK <clientID>: Kicks the specified client from the server.
+func handleOperatorCommand(command, senderID string, args []string, conn net.Conn) {
+	if !isOperator(senderID) {
+		conn.Write([]byte("ERROR Not authorized as operator\n"))
+		return
+	}
+
+	switch command {
+	case "KICK":
+		if len(args) != 1 {
+			conn.Write([]byte("ERROR Usage: KICK <clientID>\n"))
+			return
+		}
+		targetID := args[0]
+
+		// Don't allow kicking the operator
+		if targetID == operatorID {
+			conn.Write([]byte("ERROR Cannot kick the operator\n"))
+			return
+		}
+
+		clientMutex.Lock()
+		if client, exists := clients[targetID]; exists {
+			client.Conn.Write([]byte("KICKED You have been kicked by the operator\n"))
+			client.Conn.Close()
+			delete(clients, targetID)
+			conn.Write([]byte(fmt.Sprintf("SUCCESS Kicked client %s\n", targetID)))
+		} else {
+			conn.Write([]byte(fmt.Sprintf("ERROR Client %s not found\n", targetID)))
+		}
+		clientMutex.Unlock()
+	default:
+		conn.Write([]byte("ERROR Unknown operator command\n"))
+	}
+}
 
 // getTailscaleIP retrieves the IP address within the Tailscale network (100.64.0.0/10).
 func getTailscaleIP() (string, error) {
@@ -113,6 +162,7 @@ func handleClient(conn net.Conn) {
 				// Ensure the client is not already registered
 				clientMutex.RLock()
 				_, ok := clients[parts[1]]
+				clientsEmpty := len(clients) == 0
 				clientMutex.RUnlock()
 
 				if ok {
@@ -126,8 +176,18 @@ func handleClient(conn net.Conn) {
 				clientMutex.Lock()
 				clients[clientID] = &Client{ID: clientID, Conn: conn}
 				clientMutex.Unlock()
-				conn.Write([]byte("REGISTERED\n"))
-				fmt.Printf("Client registered: %s\n", clientID)
+
+				// If this is the first client, make them the operator
+				if clientsEmpty {
+					operatorMutex.Lock()
+					operatorID = clientID
+					operatorMutex.Unlock()
+					conn.Write([]byte("REGISTERED as operator\n"))
+					fmt.Printf("Client registered as operator: %s\n", clientID)
+				} else {
+					conn.Write([]byte("REGISTERED\n"))
+					fmt.Printf("Client registered: %s\n", clientID)
+				}
 
 				// Send the server's public key to the client
 				pubKeyBytes := serverPubKey.Bytes()
@@ -137,6 +197,10 @@ func handleClient(conn net.Conn) {
 			} else {
 				conn.Write([]byte("ERROR Invalid REGISTER command\n"))
 			}
+		} else if strings.HasPrefix(message, "KICK") {
+			// Handle KICK command (operator only)
+			parts := strings.Split(message, " ")
+			handleOperatorCommand("KICK", clientID, parts[1:], conn)
 		} else if strings.HasPrefix(message, "CLIENTPUBKEY") {
 			// Client is sending its public key
 			pubKeyHex := ""
@@ -342,6 +406,8 @@ func printServerCommands() string {
 	helptext += "LIST - List all connected clients\n"
 	helptext += "INFO - Print server information\n"
 	helptext += "SERVERHELP - Print this help text\n"
+	helptext += "\nOperator commands:\n"
+	helptext += "KICK <clientID> - Kick a client from the server\n"
 
 	return helptext
 }
