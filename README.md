@@ -1,3 +1,4 @@
+
 # Padserve - Secure Messaging System over Tailscale
 This Go-based messaging system implements a secure TCP server-client communication protocol, utilizing Tailscale to establish a secure network overlay. The server and clients use elliptic curve Diffie-Hellman (ECDH) key exchange to establish a shared secret for encrypted message exchanges, providing secure, authenticated communication over the Tailscale network.
 ## Features
@@ -43,6 +44,11 @@ Once connected, the client can use these commands:
  - `HELP`: Display available client commands.
  - `SERVERHELP`: Display server help text.
  - `EXIT`: Disconnect from the server and exit the client.
+
+### Operator Commands
+The first client to connect to the server is given access to Operator commands:
+
+- `KICK <ClientID>`: Kick the specified client from the server.
 
 ## Example Usage
 
