@@ -26,6 +26,8 @@ import (
 	"strings"
 )
 
+var isOperator bool
+
 // isTailscale checks if the local machine has an IP address within the Tailscale network (100.64.0.0/10).
 func isTailscale() (bool, error) {
 	// Define the Tailscale IP range
@@ -100,6 +102,22 @@ func readMessages(conn net.Conn, done chan bool) {
 			return
 		}
 		message = strings.TrimSpace(message)
+
+		// Handle being registered
+		if message == "REGISTERED as operator" {
+			isOperator = true
+			fmt.Println("\rYou are registered as the server operator.")
+			fmt.Print("> ")
+			continue
+		}
+
+		// Handle being kicked
+		if message == "KICKED You have been kicked by the operator" {
+			fmt.Println("\rYou have been kicked from the server by the operator.")
+			done <- true
+			return
+		}
+
 		if strings.HasPrefix(message, "MESSAGE from") || strings.HasPrefix(message, "BROADCAST from") {
 			parts := strings.SplitN(message, ": ", 2)
 			senderInfo := parts[0]
@@ -200,7 +218,10 @@ func main() {
 		return
 	}
 	response = strings.TrimSpace(response)
-	if response != "REGISTERED" {
+	if response == "REGISTERED as operator" {
+		isOperator = true
+		fmt.Println("You are registered as the server operator.")
+	} else if response != "REGISTERED" {
 		fmt.Println("Failed to register with server:", response)
 		return
 	}
@@ -251,6 +272,11 @@ func main() {
 	fmt.Fprintf(conn, "END CLIENTPUBKEY\n")
 
 	fmt.Println("Connected to the server. Type your commands below:")
+	if isOperator {
+		fmt.Println("You are the server operator. Type HELP to see available commands.")
+	} else {
+		fmt.Println("Type HELP to see available commands.")
+	}
 	fmt.Print("> ")
 
 	// Channel to signal when to exit
@@ -389,4 +415,9 @@ func printCommands() {
 	fmt.Println()
 	fmt.Println("Available server commands:")
 	fmt.Println("INFO - Print server information")
+
+	if isOperator {
+		fmt.Println("\nOperator commands:")
+		fmt.Println("KICK <clientID> - Kick a client from the server")
+	}
 }
