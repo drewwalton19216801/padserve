@@ -260,18 +260,23 @@ func main() {
 				fmt.Println("Input channel closed.")
 				return
 			}
-			if strings.HasPrefix(input, "SEND") {
-				// Expected format:
-				// - To a client: SEND <RecipientID> <Message>
-				// - To all: SEND ALL <Message>
-				parts := strings.SplitN(input, " ", 3)
-				if len(parts) != 3 {
+
+			// Update command parsing to enforce exact match
+			parts := strings.Fields(input)
+			if len(parts) == 0 {
+				fmt.Print("> ")
+				continue
+			}
+
+			switch parts[0] {
+			case "SEND":
+				if len(parts) < 3 {
 					fmt.Println("Invalid SEND command. Use: SEND <RecipientID|ALL> <Message>")
 					fmt.Print("> ")
 					continue
 				}
 				recipientID := parts[1]
-				messageText := parts[2]
+				messageText := strings.Join(parts[2:], " ")
 
 				if recipientID == "ALL" {
 					// Encrypt the message using the shared secret
@@ -307,16 +312,16 @@ func main() {
 					encryptedData := keyHex + "|" + ciphertextHex
 					fmt.Fprintf(conn, "SEND %s %s\n", recipientID, encryptedData)
 				}
-			} else if strings.HasPrefix(input, "HELP") || strings.HasPrefix(input, "help") {
+
+			case "HELP":
 				// Handle HELP command
 				printUsage(false)
-			} else if strings.HasPrefix(input, "EXIT") || strings.HasPrefix(input, "exit") {
+			case "EXIT":
 				fmt.Fprintf(conn, "EXIT\n")
 				fmt.Println("Exiting...")
 				return
-			} else {
-				// Send the command to the server
-				fmt.Fprintf(conn, "%s\n", input)
+			default:
+				fmt.Println("Invalid command. Type HELP to see available commands.")
 			}
 			fmt.Print("> ")
 		}
