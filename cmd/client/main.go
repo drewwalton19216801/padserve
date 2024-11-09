@@ -390,7 +390,7 @@ func main() {
 					encryptedData := keyHex + "|" + ciphertextHex
 					fmt.Fprintf(conn, "SEND %s %s\n", recipientID, encryptedData)
 				}
-
+				printPrompt(clientID, isOperator)
 			case "HELP":
 				// Handle HELP command
 				printUsage(false)
