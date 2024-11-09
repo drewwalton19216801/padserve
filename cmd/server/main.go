@@ -243,11 +243,25 @@ func handleClient(conn net.Conn) {
 			conn.Write([]byte("LISTED\n"))
 		} else if strings.HasPrefix(message, "INFO") {
 			// Print server information
-			tailscaleIP, err := tailutils.GetTailscaleIP()
-			if err != nil {
-				conn.Write([]byte("ERROR Failed to get Tailscale IP: " + err.Error() + "\n"))
+
+			// Get the IP address(es) we are currently listening on
+			tailscaleIP4, ip4err := tailutils.GetTailscaleIP()
+			tailscaleIP6, ip6err := tailutils.GetTailscaleIP6()
+			tailscaleIP := ""
+
+			// If both error, we don't have a Tailscale IP
+			if ip4err == nil && ip6err == nil {
+				tailscaleIP = fmt.Sprintf("%s, %s", tailscaleIP4, tailscaleIP6)
+			} else if ip4err == nil {
+				tailscaleIP = tailscaleIP4
+			} else if ip6err == nil {
+				tailscaleIP = tailscaleIP6
+			}
+
+			if ip4err != nil && ip6err != nil {
+				conn.Write([]byte("INFO No Tailscale IP\n"))
 			} else {
-				conn.Write([]byte(fmt.Sprintf("INFO Tailscale IP: %s\n", tailscaleIP)))
+				conn.Write([]byte(fmt.Sprintf("INFO Tailscale IP(s): %s\n", tailscaleIP)))
 
 				// Print connected clients
 				clientMutex.RLock()
