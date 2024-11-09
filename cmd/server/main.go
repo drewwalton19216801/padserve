@@ -16,6 +16,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"flag"
 	"fmt"
 	"net"
 	"strings"
@@ -33,12 +34,14 @@ type Client struct {
 }
 
 var (
-	clients       = make(map[string]*Client) // clients stores the connected clients indexed by their ID.
-	clientMutex   = sync.RWMutex{}           // mutex synchronizes access to the clients map.
-	serverPrivKey *ecdh.PrivateKey           // serverPrivKey is the server's ECDH private key.
-	serverPubKey  *ecdh.PublicKey            // serverPubKey is the server's ECDH public key.
-	operatorID    string                     // Store the operator's ID
-	operatorMutex = sync.RWMutex{}           // Mutex for operator operations
+	clients        = make(map[string]*Client) // clients stores the connected clients indexed by their ID.
+	clientMutex    = sync.RWMutex{}           // mutex synchronizes access to the clients map.
+	serverPrivKey  *ecdh.PrivateKey           // serverPrivKey is the server's ECDH private key.
+	serverPubKey   *ecdh.PublicKey            // serverPubKey is the server's ECDH public key.
+	operatorID     string                     // Store the operator's ID
+	operatorMutex  = sync.RWMutex{}           // Mutex for operator operations
+	listenerWG     sync.WaitGroup             // WaitGroup for listeners
+	shutdownSignal = make(chan struct{})      // Channel to signal shutdown
 )
 
 // isOperator returns true if the provided client ID is the operator's ID, false otherwise.
@@ -365,8 +368,52 @@ func printServerCommands() string {
 	return helptext
 }
 
+// startListener starts a TCP listener on the specified network and address.
+func startListener(network, address string) error {
+	ln, err := net.Listen(network, address)
+	if err != nil {
+		return err
+	}
+	defer ln.Close()
+	fmt.Printf("Server is listening on %s (%s)...\n", address, network)
+
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			select {
+			case <-shutdownSignal:
+				return nil
+			default:
+				fmt.Printf("Error accepting %s connection: %v\n", network, err)
+				continue
+			}
+		}
+		go handleClient(conn)
+	}
+}
+
 // main is the entry point of the server program.
 func main() {
+	// Define command-line flags
+	var ipv4Flag, ipv6Flag bool
+	flag.BoolVar(&ipv4Flag, "ipv4", false, "Enable IPv4 mode")
+	flag.BoolVar(&ipv6Flag, "ipv6", false, "Enable IPv6 mode")
+	flag.Parse()
+
+	// Determine modes based on flags
+	if !ipv4Flag && !ipv6Flag {
+		ipv4Flag = true
+		fmt.Println("No mode specified, defaulting to IPv4")
+	} else {
+		if ipv4Flag && ipv6Flag {
+			fmt.Println("Running in both IPv4 and IPv6 modes")
+		} else if ipv4Flag {
+			fmt.Println("Running in IPv4 mode")
+		} else if ipv6Flag {
+			fmt.Println("Running in IPv6 mode")
+		}
+	}
+
 	var err error
 	// Generate ECDH key pair
 	serverPrivKey, err = ecdh.P256().GenerateKey(rand.Reader)
@@ -376,28 +423,45 @@ func main() {
 	}
 	serverPubKey = serverPrivKey.PublicKey()
 
-	// Get the Tailscale IP address
-	ip, err := tailutils.GetTailscaleIP()
-	if err != nil {
-		fmt.Println("Error getting Tailscale IP:", err)
-		return
-	}
-	address := ip + ":12345" // Use port 12345 or any available port
+	// Initialize WaitGroup
+	listenerWG = sync.WaitGroup{}
 
-	ln, err := net.Listen("tcp", address)
-	if err != nil {
-		fmt.Println("Error starting server:", err)
-		return
-	}
-	defer ln.Close()
-	fmt.Printf("Server is listening on %s...\n", address)
-
-	for {
-		conn, err := ln.Accept()
+	// Start listeners based on the selected modes
+	if ipv4Flag {
+		ip4, err := tailutils.GetTailscaleIP()
 		if err != nil {
-			fmt.Println("Error accepting connection:", err)
-			continue
+			fmt.Println("Error getting Tailscale IPv4:", err)
+			return
 		}
-		go handleClient(conn)
+		address4 := ip4 + ":12345" // Use port 12345 or any available port
+		listenerWG.Add(1)
+		go func() {
+			defer listenerWG.Done()
+			err := startListener("tcp4", address4)
+			if err != nil {
+				fmt.Printf("IPv4 listener error: %v\n", err)
+			}
+		}()
 	}
+
+	if ipv6Flag {
+		ip6, err := tailutils.GetTailscaleIP6()
+		if err != nil {
+			fmt.Println("Error getting Tailscale IPv6:", err)
+			return
+		}
+		// Enclose IPv6 address in brackets
+		address6 := fmt.Sprintf("[%s]:12345", ip6)
+		listenerWG.Add(1)
+		go func() {
+			defer listenerWG.Done()
+			err := startListener("tcp6", address6)
+			if err != nil {
+				fmt.Printf("IPv6 listener error: %v\n", err)
+			}
+		}()
+	}
+
+	// Wait for all listeners to finish (which is never, unless shutdown)
+	listenerWG.Wait()
 }
