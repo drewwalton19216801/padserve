@@ -328,7 +328,8 @@ func main() {
 				fmt.Println("Exiting...")
 				return
 			default:
-				fmt.Println("Invalid command. Type HELP to see available commands.")
+				// Pass the command to the server
+				fmt.Fprintf(conn, "%s\n", input)
 			}
 			fmt.Print("> ")
 		}
