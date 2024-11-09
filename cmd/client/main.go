@@ -372,13 +372,6 @@ func printCommands() {
 	fmt.Println("Available client commands:")
 	fmt.Println("SEND <RecipientID|ALL> <Message> - Send a message to a specific client or all clients")
 	fmt.Println("HELP - Print this help text")
+	fmt.Println("SERVERHELP - Print server help text")
 	fmt.Println("EXIT - Exit the program")
-	fmt.Println()
-	fmt.Println("Available server commands:")
-	fmt.Println("INFO - Print server information")
-
-	if isOperator {
-		fmt.Println("\nOperator commands:")
-		fmt.Println("KICK <clientID> - Kick a client from the server")
-	}
 }

@@ -325,19 +325,11 @@ func handleClient(conn net.Conn) {
 				conn.Write([]byte("INFO No Tailscale IP\n"))
 			} else {
 				conn.Write([]byte(fmt.Sprintf("INFO Tailscale IP(s): %s\n", tailscaleIP)))
-
-				clientMutex.RLock()
-				for _, client := range clients {
-					conn.Write([]byte(fmt.Sprintf("CLIENT %s\n", client.ID)))
-				}
-				clientMutex.RUnlock()
-
-				conn.Write([]byte(printServerCommands()))
-				conn.Write([]byte("INFO LISTED\n"))
 			}
 		case "SERVERHELP":
-			conn.Write([]byte(printServerCommands()))
-			conn.Write([]byte("SERVERHELP LISTED\n"))
+			// Determine if the client is an operator
+			operatorStatus := isOperator(clientID)
+			conn.Write([]byte(printServerCommands(operatorStatus)))
 		default:
 			conn.Write([]byte("ERROR Unknown command: " + message + "\n"))
 		}
@@ -429,15 +421,20 @@ func encrypt(message, key []byte) []byte {
 }
 
 // printServerCommands returns a string containing the list of available server commands.
-func printServerCommands() string {
+func printServerCommands(isOperator bool) string {
 	var helptext string
 
 	helptext += "Available server commands:\n"
 	helptext += "LIST - List all connected clients\n"
 	helptext += "INFO - Print server information\n"
-	helptext += "SERVERHELP - Print this help text\n"
-	helptext += "\nOperator commands:\n"
-	helptext += "KICK <clientID> - Kick a client from the server\n"
+
+	if isOperator {
+		helptext += "Operator commands:\n"
+		helptext += "KICK <clientID> - Kick a client from the server\n"
+		helptext += "BAN <clientID> - Ban a client from the server\n"
+		helptext += "UNBAN <clientID> - Unban a client from the server\n"
+		helptext += "LISTBANS - List all banned clients\n"
+	}
 
 	return helptext
 }
