@@ -27,6 +27,14 @@ jobs:
     - name: Build Client
       run: go build -v ./cmd/client
 
-    - name: Upload a Build Artifact
+    - name: Upload Server
       uses: actions/upload-artifact@v4.4.3
-        
+      with:
+        name: padserve_server
+        path: ./padserve_server
+
+    - name: Upload Client
+      uses: actions/upload-artifact@v4.4.3
+      with:
+        name: padserve_client
+        path: ./padserve_client
