@@ -42,6 +42,8 @@ var (
 	operatorMutex  = sync.RWMutex{}           // Mutex for operator operations
 	listenerWG     sync.WaitGroup             // WaitGroup for listeners
 	shutdownSignal = make(chan struct{})      // Channel to signal shutdown
+	bannedClients  = make(map[string]bool)    // Store banned clients
+	banMutex       = sync.RWMutex{}           // Mutex for ban operations
 )
 
 // isOperator returns true if the provided client ID is the operator's ID, false otherwise.
@@ -49,6 +51,13 @@ func isOperator(clientID string) bool {
 	operatorMutex.RLock()
 	defer operatorMutex.RUnlock()
 	return clientID == operatorID
+}
+
+// isBanned returns true if the provided client ID is banned, false otherwise.
+func isBanned(clientID string) bool {
+	banMutex.RLock()
+	defer banMutex.RUnlock()
+	return bannedClients[clientID]
 }
 
 // handleOperatorCommand processes an operator command and takes the appropriate action.
@@ -86,6 +95,51 @@ func handleOperatorCommand(command, senderID string, args []string, conn net.Con
 			conn.Write([]byte(fmt.Sprintf("ERROR Client %s not found\n", targetID)))
 		}
 		clientMutex.Unlock()
+	case "BAN":
+		if len(args) != 1 {
+			conn.Write([]byte("ERROR Usage: BAN <clientID>\n"))
+			return
+		}
+		targetID := args[0]
+		if targetID == operatorID {
+			conn.Write([]byte("ERROR Cannot ban the operator\n"))
+			return
+		}
+		banMutex.Lock()
+		bannedClients[targetID] = true
+		banMutex.Unlock()
+		clientMutex.Lock()
+		if client, exists := clients[targetID]; exists {
+			client.Conn.Write([]byte("BANNED You have been banned by the operator\n"))
+			client.Conn.Close()
+			delete(clients, targetID)
+		}
+		clientMutex.Unlock()
+		conn.Write([]byte(fmt.Sprintf("SUCCESS Banned client %s\n", targetID)))
+	case "UNBAN":
+		if len(args) != 1 {
+			conn.Write([]byte("ERROR Usage: UNBAN <clientID>\n"))
+			return
+		}
+		targetID := args[0]
+		banMutex.Lock()
+		if _, exists := bannedClients[targetID]; exists {
+			delete(bannedClients, targetID)
+			conn.Write([]byte(fmt.Sprintf("SUCCESS Unbanned client %s\n", targetID)))
+		} else {
+			conn.Write([]byte(fmt.Sprintf("ERROR Client %s not found in banned list\n", targetID)))
+		}
+		banMutex.Unlock()
+	case "LISTBANS":
+		banMutex.RLock()
+		if len(bannedClients) == 0 {
+			conn.Write([]byte("No clients are currently banned\n"))
+		} else {
+			for clientID := range bannedClients {
+				conn.Write([]byte(fmt.Sprintf("BANNED %s\n", clientID)))
+			}
+		}
+		banMutex.RUnlock()
 	default:
 		conn.Write([]byte("ERROR Unknown operator command\n"))
 	}
@@ -120,6 +174,10 @@ func handleClient(conn net.Conn) {
 		case "REGISTER":
 			if len(args) == 1 {
 				clientIDCandidate := args[0]
+				if isBanned(clientIDCandidate) {
+					conn.Write([]byte("ERROR You are banned from this server\n"))
+					return
+				}
 				clientMutex.RLock()
 				_, ok := clients[clientIDCandidate]
 				clientsEmpty := len(clients) == 0
@@ -159,6 +217,20 @@ func handleClient(conn net.Conn) {
 			} else {
 				conn.Write([]byte("ERROR Invalid KICK command\n"))
 			}
+		case "BAN":
+			if len(args) >= 1 {
+				handleOperatorCommand("BAN", clientID, args, conn)
+			} else {
+				conn.Write([]byte("ERROR Invalid BAN command\n"))
+			}
+		case "UNBAN":
+			if len(args) >= 1 {
+				handleOperatorCommand("UNBAN", clientID, args, conn)
+			} else {
+				conn.Write([]byte("ERROR Invalid UNBAN command\n"))
+			}
+		case "LISTBANS":
+			handleOperatorCommand("LISTBANS", clientID, args, conn)
 		case "CLIENTPUBKEY":
 			pubKeyHex := ""
 			for {
@@ -253,19 +325,11 @@ func handleClient(conn net.Conn) {
 				conn.Write([]byte("INFO No Tailscale IP\n"))
 			} else {
 				conn.Write([]byte(fmt.Sprintf("INFO Tailscale IP(s): %s\n", tailscaleIP)))
-
-				clientMutex.RLock()
-				for _, client := range clients {
-					conn.Write([]byte(fmt.Sprintf("CLIENT %s\n", client.ID)))
-				}
-				clientMutex.RUnlock()
-
-				conn.Write([]byte(printServerCommands()))
-				conn.Write([]byte("INFO LISTED\n"))
 			}
 		case "SERVERHELP":
-			conn.Write([]byte(printServerCommands()))
-			conn.Write([]byte("SERVERHELP LISTED\n"))
+			// Determine if the client is an operator
+			operatorStatus := isOperator(clientID)
+			conn.Write([]byte(printServerCommands(operatorStatus)))
 		default:
 			conn.Write([]byte("ERROR Unknown command: " + message + "\n"))
 		}
@@ -357,15 +421,20 @@ func encrypt(message, key []byte) []byte {
 }
 
 // printServerCommands returns a string containing the list of available server commands.
-func printServerCommands() string {
+func printServerCommands(isOperator bool) string {
 	var helptext string
 
 	helptext += "Available server commands:\n"
 	helptext += "LIST - List all connected clients\n"
 	helptext += "INFO - Print server information\n"
-	helptext += "SERVERHELP - Print this help text\n"
-	helptext += "\nOperator commands:\n"
-	helptext += "KICK <clientID> - Kick a client from the server\n"
+
+	if isOperator {
+		helptext += "Operator commands:\n"
+		helptext += "KICK <clientID> - Kick a client from the server\n"
+		helptext += "BAN <clientID> - Ban a client from the server\n"
+		helptext += "UNBAN <clientID> - Unban a client from the server\n"
+		helptext += "LISTBANS - List all banned clients\n"
+	}
 
 	return helptext
 }

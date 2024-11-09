@@ -66,6 +66,13 @@ func readMessages(conn net.Conn, done chan bool) {
 			return
 		}
 
+		// Handle being banned
+		if message == "BANNED You have been banned by the operator" {
+			fmt.Println("\rYou have been banned from the server by the operator.")
+			done <- true
+			return
+		}
+
 		if strings.HasPrefix(message, "MESSAGE from") || strings.HasPrefix(message, "BROADCAST from") {
 			parts := strings.SplitN(message, ": ", 2)
 			senderInfo := parts[0]
@@ -321,7 +328,8 @@ func main() {
 				fmt.Println("Exiting...")
 				return
 			default:
-				fmt.Println("Invalid command. Type HELP to see available commands.")
+				// Pass the command to the server
+				fmt.Fprintf(conn, "%s\n", input)
 			}
 			fmt.Print("> ")
 		}
@@ -364,13 +372,6 @@ func printCommands() {
 	fmt.Println("Available client commands:")
 	fmt.Println("SEND <RecipientID|ALL> <Message> - Send a message to a specific client or all clients")
 	fmt.Println("HELP - Print this help text")
+	fmt.Println("SERVERHELP - Print server help text")
 	fmt.Println("EXIT - Exit the program")
-	fmt.Println()
-	fmt.Println("Available server commands:")
-	fmt.Println("INFO - Print server information")
-
-	if isOperator {
-		fmt.Println("\nOperator commands:")
-		fmt.Println("KICK <clientID> - Kick a client from the server")
-	}
 }
