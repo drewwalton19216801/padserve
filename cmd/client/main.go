@@ -66,6 +66,13 @@ func readMessages(conn net.Conn, done chan bool) {
 			return
 		}
 
+		// Handle being banned
+		if message == "BANNED You have been banned by the operator" {
+			fmt.Println("\rYou have been banned from the server by the operator.")
+			done <- true
+			return
+		}
+
 		if strings.HasPrefix(message, "MESSAGE from") || strings.HasPrefix(message, "BROADCAST from") {
 			parts := strings.SplitN(message, ": ", 2)
 			senderInfo := parts[0]
