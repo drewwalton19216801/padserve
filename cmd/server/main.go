@@ -131,6 +131,7 @@ func handleOperatorCommand(command, senderID string, args []string, conn net.Con
 		}
 		banMutex.Unlock()
 	case "LISTBANS":
+		conn.Write([]byte("BEGIN_RESPONSE\n"))
 		banMutex.RLock()
 		if len(bannedClients) == 0 {
 			conn.Write([]byte("No clients are currently banned\n"))
@@ -140,6 +141,7 @@ func handleOperatorCommand(command, senderID string, args []string, conn net.Con
 			}
 		}
 		banMutex.RUnlock()
+		conn.Write([]byte("END_RESPONSE\n"))
 	default:
 		conn.Write([]byte("ERROR Unknown operator command\n"))
 	}
@@ -302,12 +304,13 @@ func handleClient(conn net.Conn) {
 				conn.Write([]byte("ERROR Invalid SEND command\n"))
 			}
 		case "LIST":
+			conn.Write([]byte("BEGIN_RESPONSE\n"))
 			clientMutex.RLock()
 			for _, client := range clients {
 				conn.Write([]byte(fmt.Sprintf("CLIENT %s\n", client.ID)))
 			}
 			clientMutex.RUnlock()
-			conn.Write([]byte("LISTED\n"))
+			conn.Write([]byte("END_RESPONSE\n"))
 		case "INFO":
 			tailscaleIP4, ip4err := tailutils.GetTailscaleIP()
 			tailscaleIP6, ip6err := tailutils.GetTailscaleIP6()
@@ -329,7 +332,13 @@ func handleClient(conn net.Conn) {
 		case "SERVERHELP":
 			// Determine if the client is an operator
 			operatorStatus := isOperator(clientID)
-			conn.Write([]byte(printServerCommands(operatorStatus)))
+			// Send BEGIN_RESPONSE marker
+			conn.Write([]byte("BEGIN_RESPONSE\n"))
+			// Send the help text
+			helpText := printServerCommands(operatorStatus)
+			conn.Write([]byte(helpText))
+			// Send END_RESPONSE marker
+			conn.Write([]byte("END_RESPONSE\n"))
 		default:
 			conn.Write([]byte("ERROR Unknown command: " + message + "\n"))
 		}
@@ -435,6 +444,8 @@ func printServerCommands(isOperator bool) string {
 		helptext += "UNBAN <clientID> - Unban a client from the server\n"
 		helptext += "LISTBANS - List all banned clients\n"
 	}
+
+	helptext += "END SERVERHELP\n"
 
 	return helptext
 }

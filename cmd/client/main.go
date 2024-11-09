@@ -40,8 +40,9 @@ func encrypt(message, key []byte) []byte {
 }
 
 // readMessages continuously reads messages from the server and processes them.
-func readMessages(conn net.Conn, done chan bool) {
+func readMessages(conn net.Conn, done chan bool, clientID string) {
 	reader := bufio.NewReader(conn)
+	var inMultiLineResponse bool = false
 	for {
 		message, err := reader.ReadString('\n')
 		if err != nil {
@@ -49,13 +50,17 @@ func readMessages(conn net.Conn, done chan bool) {
 			done <- true // Signal main function to exit
 			return
 		}
-		message = strings.TrimSpace(message)
+		message = strings.TrimRight(message, "\r\n")
+
+		if message == "" {
+			continue
+		}
 
 		// Handle being registered
 		if message == "REGISTERED as operator" {
 			isOperator = true
 			fmt.Println("\rYou are registered as the server operator.")
-			fmt.Print("> ")
+			printPrompt(clientID, isOperator)
 			continue
 		}
 
@@ -71,6 +76,19 @@ func readMessages(conn net.Conn, done chan bool) {
 			fmt.Println("\rYou have been banned from the server by the operator.")
 			done <- true
 			return
+		}
+
+		// Detect the start of a multi-line response
+		if message == "BEGIN_RESPONSE" {
+			inMultiLineResponse = true
+			continue // Skip printing the marker
+		}
+
+		// Detect the end of a multi-line response
+		if message == "END_RESPONSE" {
+			inMultiLineResponse = false
+			printPrompt(clientID, isOperator)
+			continue // Skip printing the marker
 		}
 
 		if strings.HasPrefix(message, "MESSAGE from") || strings.HasPrefix(message, "BROADCAST from") {
@@ -119,10 +137,63 @@ func readMessages(conn net.Conn, done chan bool) {
 				fmt.Printf("\rBroadcast from %s: %s\n> ", senderID, string(plaintext))
 			}
 		} else {
-			fmt.Println("\r" + message)
-			fmt.Print("> ")
+			fmt.Println(message)
+
+			if !inMultiLineResponse {
+				printPrompt(clientID, isOperator)
+			}
 		}
 	}
+}
+
+// encryptAES encrypts the plaintext using AES encryption with the provided key.
+func encryptAES(key, plaintext []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	padding := aes.BlockSize - len(plaintext)%aes.BlockSize
+	padtext := bytes.Repeat([]byte{byte(padding)}, padding)
+	plaintext = append(plaintext, padtext...)
+
+	ciphertext := make([]byte, aes.BlockSize+len(plaintext))
+	iv := ciphertext[:aes.BlockSize]
+	_, err = io.ReadFull(rand.Reader, iv)
+	if err != nil {
+		return nil, err
+	}
+	mode := cipher.NewCBCEncrypter(block, iv)
+	mode.CryptBlocks(ciphertext[aes.BlockSize:], plaintext)
+	return ciphertext, nil
+}
+
+// printUsage displays help text for the client commands.
+func printUsage(invalid bool) {
+	if invalid {
+		fmt.Println("Invalid command.")
+		printCommands()
+	} else {
+		printCommands()
+	}
+}
+
+// printCommands prints the list of available client and server commands.
+func printCommands() {
+	fmt.Println("Available client commands:")
+	fmt.Println("SEND <RecipientID|ALL> <Message> - Send a message to a specific client or all clients")
+	fmt.Println("HELP - Print this help text")
+	fmt.Println("SERVERHELP - Print server help text")
+	fmt.Println("EXIT - Exit the program")
+}
+
+// printPrompt prints the client prompt, showing the client ID and operator status.
+func printPrompt(clientID string, isOperator bool) {
+	fmt.Printf("%s%s > ", clientID, func() string {
+		if isOperator {
+			return " (op)"
+		}
+		return ""
+	}())
 }
 
 func main() {
@@ -232,13 +303,13 @@ func main() {
 	} else {
 		fmt.Println("Type HELP to see available commands.")
 	}
-	fmt.Print("> ")
+	printPrompt(clientID, isOperator)
 
 	// Channel to signal when to exit
 	done := make(chan bool)
 
 	// Start a goroutine to read messages from the server
-	go readMessages(conn, done)
+	go readMessages(conn, done, clientID)
 
 	// Start a goroutine to read user input
 	inputChan := make(chan string)
@@ -271,7 +342,7 @@ func main() {
 			// Update command parsing to enforce exact match
 			parts := strings.Fields(input)
 			if len(parts) == 0 {
-				fmt.Print("> ")
+				printPrompt(clientID, isOperator)
 				continue
 			}
 
@@ -279,7 +350,7 @@ func main() {
 			case "SEND":
 				if len(parts) < 3 {
 					fmt.Println("Invalid SEND command. Use: SEND <RecipientID|ALL> <Message>")
-					fmt.Print("> ")
+					printPrompt(clientID, isOperator)
 					continue
 				}
 				recipientID := parts[1]
@@ -290,7 +361,7 @@ func main() {
 					encryptedData, err := encryptAES(hashedSecret[:], []byte(messageText))
 					if err != nil {
 						fmt.Println("Error encrypting message:", err)
-						fmt.Print("> ")
+						printPrompt(clientID, isOperator)
 						continue
 					}
 					// Encode the encrypted data in hex
@@ -303,7 +374,7 @@ func main() {
 					_, err := rand.Read(key)
 					if err != nil {
 						fmt.Println("Error generating OTP key:", err)
-						fmt.Print("> ")
+						printPrompt(clientID, isOperator)
 						continue
 					}
 
@@ -323,6 +394,7 @@ func main() {
 			case "HELP":
 				// Handle HELP command
 				printUsage(false)
+				printPrompt(clientID, isOperator)
 			case "EXIT":
 				fmt.Fprintf(conn, "EXIT\n")
 				fmt.Println("Exiting...")
@@ -331,47 +403,6 @@ func main() {
 				// Pass the command to the server
 				fmt.Fprintf(conn, "%s\n", input)
 			}
-			fmt.Print("> ")
 		}
 	}
-}
-
-// encryptAES encrypts the plaintext using AES encryption with the provided key.
-func encryptAES(key, plaintext []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	padding := aes.BlockSize - len(plaintext)%aes.BlockSize
-	padtext := bytes.Repeat([]byte{byte(padding)}, padding)
-	plaintext = append(plaintext, padtext...)
-
-	ciphertext := make([]byte, aes.BlockSize+len(plaintext))
-	iv := ciphertext[:aes.BlockSize]
-	_, err = io.ReadFull(rand.Reader, iv)
-	if err != nil {
-		return nil, err
-	}
-	mode := cipher.NewCBCEncrypter(block, iv)
-	mode.CryptBlocks(ciphertext[aes.BlockSize:], plaintext)
-	return ciphertext, nil
-}
-
-// printUsage displays help text for the client commands.
-func printUsage(invalid bool) {
-	if invalid {
-		fmt.Println("Invalid command.")
-		printCommands()
-	} else {
-		printCommands()
-	}
-}
-
-// printCommands prints the list of available client and server commands.
-func printCommands() {
-	fmt.Println("Available client commands:")
-	fmt.Println("SEND <RecipientID|ALL> <Message> - Send a message to a specific client or all clients")
-	fmt.Println("HELP - Print this help text")
-	fmt.Println("SERVERHELP - Print server help text")
-	fmt.Println("EXIT - Exit the program")
 }
