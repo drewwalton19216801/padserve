@@ -9,6 +9,7 @@ This Go-based messaging system implements a secure TCP server-client communicati
 3. **Tailscale Integration:** This system is designed to work exclusively over Tailscale, using its internal IP addresses (100.64.0.0/10 and fd7a:115c:a1e0::/48).
 4. **IPv4 and IPv6 Support:** The server now supports binding to both IPv4 and IPv6 Tailscale addresses, based on user preferences.
 5. **Basic Commands:** Support for user registration, listing active users, sending messages, and fetching server information.
+6. **Operator Commands:** Support for basic server operator command including banning and unbanning of clients.
 
 ## Requirements
 
@@ -78,6 +79,9 @@ Once connected, the client can use these commands:
 The first client to connect to the server is given access to Operator commands:
 
 - `KICK <ClientID>`: Kick the specified client from the server.
+- `BAN <ClientID>`: Ban the specified client from the server.
+- `UNBAN <ClientID>`: Unban the specified client from the server.
+- `LISTBANS`: List the currently banned clients on the server.
 
 ## Example Usage
 
