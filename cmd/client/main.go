@@ -24,63 +24,11 @@ import (
 	"net"
 	"os"
 	"strings"
+
+	"github.com/drewwalton19216801/tailutils"
 )
 
 var isOperator bool
-
-// isTailscale checks if the local machine has an IP address within the Tailscale network (100.64.0.0/10).
-func isTailscale() (bool, error) {
-	// Define the Tailscale IP range
-	_, tsNet, err := net.ParseCIDR("100.64.0.0/10")
-	if err != nil {
-		return false, fmt.Errorf("failed to parse Tailscale CIDR: %v", err)
-	}
-
-	// Get a list of all network interfaces
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		return false, fmt.Errorf("failed to get network interfaces: %v", err)
-	}
-
-	for _, iface := range interfaces {
-		// Skip interfaces that are down or are loopback interfaces
-		if (iface.Flags&net.FlagUp) == 0 || (iface.Flags&net.FlagLoopback) != 0 {
-			continue
-		}
-
-		// Get all addresses associated with the interface
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue // If we can't get addresses, skip this interface
-		}
-
-		for _, addr := range addrs {
-			// Check if the address is an IPNet
-			ipNet, ok := addr.(*net.IPNet)
-			if !ok {
-				continue
-			}
-
-			ip := ipNet.IP
-			// Consider only IPv4 addresses
-			if ip.To4() == nil {
-				continue
-			}
-
-			// Skip loopback and link-local addresses
-			if ip.IsLoopback() || ip.IsLinkLocalUnicast() {
-				continue
-			}
-
-			// Check if the IP is within the Tailscale network
-			if tsNet.Contains(ip) {
-				return true, nil
-			}
-		}
-	}
-
-	return false, nil
-}
 
 // encrypt performs OTP encryption (XOR cipher) on the message using the provided key.
 func encrypt(message, key []byte) []byte {
@@ -180,7 +128,7 @@ func main() {
 	address := serverIP + ":12345"
 
 	// Check if the local IP address belongs to a Tailscale interface
-	isTailscale, err := isTailscale()
+	isTailscale, err := tailutils.HasTailscaleIP()
 	if err != nil {
 		fmt.Println("Error checking local IP address:", err)
 		return

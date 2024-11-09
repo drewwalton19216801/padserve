@@ -20,6 +20,8 @@ import (
 	"net"
 	"strings"
 	"sync"
+
+	"github.com/drewwalton19216801/tailutils"
 )
 
 // Client represents a connected client with its associated ID, connection, public key, and shared secret.
@@ -84,55 +86,6 @@ func handleOperatorCommand(command, senderID string, args []string, conn net.Con
 	default:
 		conn.Write([]byte("ERROR Unknown operator command\n"))
 	}
-}
-
-// getTailscaleIP retrieves the IP address within the Tailscale network (100.64.0.0/10).
-func getTailscaleIP() (string, error) {
-	// Define the Tailscale IP range
-	_, tsNet, err := net.ParseCIDR("100.64.0.0/10")
-	if err != nil {
-		return "", fmt.Errorf("failed to parse Tailscale CIDR: %v", err)
-	}
-
-	// Get a list of all network interfaces
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		return "", fmt.Errorf("failed to get network interfaces: %v", err)
-	}
-
-	for _, iface := range interfaces {
-		// Skip interfaces that are down or are loopback interfaces
-		if (iface.Flags&net.FlagUp) == 0 || (iface.Flags&net.FlagLoopback) != 0 {
-			continue
-		}
-
-		// Get all addresses associated with the interface
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue // If we can't get addresses, skip this interface
-		}
-
-		for _, addr := range addrs {
-			// Check if the address is an IPNet
-			ipNet, ok := addr.(*net.IPNet)
-			if !ok {
-				continue
-			}
-
-			ip := ipNet.IP
-			// Consider only IPv4 addresses
-			if ip.To4() == nil {
-				continue
-			}
-
-			// Check if the IP is within the Tailscale network
-			if tsNet.Contains(ip) {
-				return ip.String(), nil
-			}
-		}
-	}
-
-	return "", fmt.Errorf("no Tailscale IP address found")
 }
 
 // handleClient handles communication with a connected client over the given net.Conn.
@@ -287,7 +240,7 @@ func handleClient(conn net.Conn) {
 			conn.Write([]byte("LISTED\n"))
 		} else if strings.HasPrefix(message, "INFO") {
 			// Print server information
-			tailscaleIP, err := getTailscaleIP()
+			tailscaleIP, err := tailutils.GetTailscaleIP()
 			if err != nil {
 				conn.Write([]byte("ERROR Failed to get Tailscale IP: " + err.Error() + "\n"))
 			} else {
@@ -423,8 +376,8 @@ func main() {
 	}
 	serverPubKey = serverPrivKey.PublicKey()
 
-	// Use getTailscaleIP to get the Tailscale IP address
-	ip, err := getTailscaleIP()
+	// Get the Tailscale IP address
+	ip, err := tailutils.GetTailscaleIP()
 	if err != nil {
 		fmt.Println("Error getting Tailscale IP:", err)
 		return
