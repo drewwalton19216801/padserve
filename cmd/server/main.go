@@ -112,28 +112,29 @@ func handleClient(conn net.Conn) {
 		message = strings.TrimSpace(message)
 		fmt.Printf("Received from %s: %s\n", clientID, message)
 
-		if strings.HasPrefix(message, "REGISTER") {
-			parts := strings.Split(message, " ")
-			if len(parts) == 2 {
-				// Ensure the client is not already registered
+		parts := strings.Split(message, " ")
+		command := parts[0]
+		args := parts[1:]
+
+		switch command {
+		case "REGISTER":
+			if len(args) == 1 {
+				clientIDCandidate := args[0]
 				clientMutex.RLock()
-				_, ok := clients[parts[1]]
+				_, ok := clients[clientIDCandidate]
 				clientsEmpty := len(clients) == 0
 				clientMutex.RUnlock()
 
 				if ok {
 					conn.Write([]byte("ERROR Client name already registered\n"))
-					fmt.Printf("Client %s is already registered.\n", parts[1])
 					continue
 				}
 
-				// Good to go, register the client
-				clientID = parts[1]
+				clientID = clientIDCandidate
 				clientMutex.Lock()
 				clients[clientID] = &Client{ID: clientID, Conn: conn}
 				clientMutex.Unlock()
 
-				// If this is the first client, make them the operator
 				if clientsEmpty {
 					operatorMutex.Lock()
 					operatorID = clientID
@@ -145,7 +146,6 @@ func handleClient(conn net.Conn) {
 					fmt.Printf("Client registered: %s\n", clientID)
 				}
 
-				// Send the server's public key to the client
 				pubKeyBytes := serverPubKey.Bytes()
 				conn.Write([]byte("PUBLICKEY\n"))
 				conn.Write([]byte(hex.EncodeToString(pubKeyBytes) + "\n"))
@@ -153,12 +153,13 @@ func handleClient(conn net.Conn) {
 			} else {
 				conn.Write([]byte("ERROR Invalid REGISTER command\n"))
 			}
-		} else if strings.HasPrefix(message, "KICK") {
-			// Handle KICK command (operator only)
-			parts := strings.Split(message, " ")
-			handleOperatorCommand("KICK", clientID, parts[1:], conn)
-		} else if strings.HasPrefix(message, "CLIENTPUBKEY") {
-			// Client is sending its public key
+		case "KICK":
+			if len(args) >= 1 {
+				handleOperatorCommand("KICK", clientID, args, conn)
+			} else {
+				conn.Write([]byte("ERROR Invalid KICK command\n"))
+			}
+		case "CLIENTPUBKEY":
 			pubKeyHex := ""
 			for {
 				line, err := reader.ReadString('\n')
@@ -184,29 +185,25 @@ func handleClient(conn net.Conn) {
 				return
 			}
 
-			// Compute shared secret
 			sharedSecret, err := serverPrivKey.ECDH(clientPubKey)
 			if err != nil {
 				fmt.Println("Error computing shared secret:", err)
 				return
 			}
-			// Hash the shared secret to derive a key
-			hashedSecret := sha256.Sum256(sharedSecret)
 
-			// Store the client's public key and shared secret
+			hashedSecret := sha256.Sum256(sharedSecret)
 			clientMutex.Lock()
 			if client, exists := clients[clientID]; exists {
 				client.PublicKey = clientPubKey
 				client.SharedSecret = hashedSecret[:]
 			}
 			clientMutex.Unlock()
-		} else if strings.HasPrefix(message, "SEND") {
-			parts := strings.SplitN(message, " ", 3)
-			if len(parts) == 3 {
-				recipientID := parts[1]
-				encryptedDataHex := parts[2]
+		case "SEND":
+			if len(args) == 2 {
+				recipientID := args[0]
+				encryptedDataHex := args[1]
+
 				if recipientID == "ALL" {
-					// Decrypt the message using the shared secret
 					clientMutex.RLock()
 					client := clients[clientID]
 					clientMutex.RUnlock()
@@ -224,7 +221,6 @@ func handleClient(conn net.Conn) {
 						conn.Write([]byte("ERROR Decryption failed\n"))
 						continue
 					}
-					// Now handle the broadcast with the plaintext message
 					handleBroadcast(clientID, string(plaintext))
 					conn.Write([]byte("BROADCAST SENT\n"))
 				} else {
@@ -233,23 +229,18 @@ func handleClient(conn net.Conn) {
 			} else {
 				conn.Write([]byte("ERROR Invalid SEND command\n"))
 			}
-		} else if strings.HasPrefix(message, "LIST") {
-			// List all connected clients
+		case "LIST":
 			clientMutex.RLock()
 			for _, client := range clients {
 				conn.Write([]byte(fmt.Sprintf("CLIENT %s\n", client.ID)))
 			}
 			clientMutex.RUnlock()
 			conn.Write([]byte("LISTED\n"))
-		} else if strings.HasPrefix(message, "INFO") {
-			// Print server information
-
-			// Get the IP address(es) we are currently listening on
+		case "INFO":
 			tailscaleIP4, ip4err := tailutils.GetTailscaleIP()
 			tailscaleIP6, ip6err := tailutils.GetTailscaleIP6()
 			tailscaleIP := ""
 
-			// If both error, we don't have a Tailscale IP
 			if ip4err == nil && ip6err == nil {
 				tailscaleIP = fmt.Sprintf("%s, %s", tailscaleIP4, tailscaleIP6)
 			} else if ip4err == nil {
@@ -263,22 +254,19 @@ func handleClient(conn net.Conn) {
 			} else {
 				conn.Write([]byte(fmt.Sprintf("INFO Tailscale IP(s): %s\n", tailscaleIP)))
 
-				// Print connected clients
 				clientMutex.RLock()
 				for _, client := range clients {
 					conn.Write([]byte(fmt.Sprintf("CLIENT %s\n", client.ID)))
 				}
 				clientMutex.RUnlock()
 
-				// Print server commands
 				conn.Write([]byte(printServerCommands()))
 				conn.Write([]byte("INFO LISTED\n"))
 			}
-		} else if strings.HasPrefix(message, "SERVERHELP") {
-			// Print server commands
+		case "SERVERHELP":
 			conn.Write([]byte(printServerCommands()))
 			conn.Write([]byte("SERVERHELP LISTED\n"))
-		} else {
+		default:
 			conn.Write([]byte("ERROR Unknown command: " + message + "\n"))
 		}
 	}
