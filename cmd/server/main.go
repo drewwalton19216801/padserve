@@ -272,6 +272,8 @@ func handleClient(conn net.Conn) {
 				client.SharedSecret = hashedSecret[:]
 			}
 			clientMutex.Unlock()
+
+			conn.Write([]byte("CLIENTPUBKEY_RECEIVED\n"))
 		case "SEND":
 			if len(args) == 2 {
 				recipientID := args[0]
