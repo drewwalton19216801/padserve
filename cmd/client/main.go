@@ -40,11 +40,16 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/drewwalton19216801/tailutils"
 )
 
-var isOperator bool
+var (
+	isOperator   bool       // Flag to track if the client is the operator
+	consoleMutex sync.Mutex // Mutex for console output
+	clientID     string
+)
 
 // encrypt performs OTP encryption (XOR cipher) on the message using the provided key.
 func encrypt(message, key []byte) []byte {
@@ -55,14 +60,30 @@ func encrypt(message, key []byte) []byte {
 	return ciphertext
 }
 
+// consoleLog prints messages to the console while maintaining the prompt
+func consoleLog(message string, args ...interface{}) {
+	consoleMutex.Lock()
+	defer consoleMutex.Unlock()
+
+	// Save the cursor position, clear the line, print message, restore cursor, and then reprint the prompt
+	fmt.Print("\033[s") // Save cursor position
+	fmt.Print("\033[K") // Clear to the end of the line
+
+	// Print the message
+	fmt.Printf(message+"\n", args...)
+
+	// Restore cursor position and print the prompt
+	fmt.Print("\033[u") // Restore cursor position
+}
+
 // readMessages continuously reads messages from the server and processes them.
-func readMessages(conn net.Conn, done chan bool, clientID string) {
+func readMessages(conn net.Conn, done chan bool) {
 	reader := bufio.NewReader(conn)
 	var inMultiLineResponse bool = false
 	for {
 		message, err := reader.ReadString('\n')
 		if err != nil {
-			fmt.Println("Disconnected from server.")
+			consoleLog("Disconnected from server.")
 			done <- true // Signal main function to exit
 			return
 		}
@@ -75,21 +96,21 @@ func readMessages(conn net.Conn, done chan bool, clientID string) {
 		// Handle being registered
 		if message == "REGISTERED as operator" {
 			isOperator = true
-			fmt.Println("\rYou are registered as the server operator.")
-			printPrompt(clientID, isOperator)
+			consoleLog("\rYou are registered as the server operator.")
+			printPrompt()
 			continue
 		}
 
 		// Handle being kicked
 		if message == "KICKED You have been kicked by the operator" {
-			fmt.Println("\rYou have been kicked from the server by the operator.")
+			consoleLog("\rYou have been kicked from the server by the operator.")
 			done <- true
 			return
 		}
 
 		// Handle being banned
 		if message == "BANNED You have been banned by the operator" {
-			fmt.Println("\rYou have been banned from the server by the operator.")
+			consoleLog("\rYou have been banned from the server by the operator.")
 			done <- true
 			return
 		}
@@ -103,7 +124,7 @@ func readMessages(conn net.Conn, done chan bool, clientID string) {
 		// Detect the end of a multi-line response
 		if message == "END_RESPONSE" {
 			inMultiLineResponse = false
-			printPrompt(clientID, isOperator)
+			printPrompt()
 			continue // Skip printing the marker
 		}
 
@@ -123,7 +144,7 @@ func readMessages(conn net.Conn, done chan bool, clientID string) {
 			// Encrypted data format: key_hex|ciphertext_hex
 			dataParts := strings.SplitN(encryptedData, "|", 2)
 			if len(dataParts) != 2 {
-				fmt.Printf("\rInvalid message format from %s. Ignoring.\n> ", senderID)
+				consoleLog("\rInvalid message format from %s. Ignoring.\n> ", senderID)
 				continue
 			}
 			keyHex := dataParts[0]
@@ -132,31 +153,33 @@ func readMessages(conn net.Conn, done chan bool, clientID string) {
 			// Decode hex strings
 			key, err := hex.DecodeString(keyHex)
 			if err != nil {
-				fmt.Printf("\rError decoding key from %s: %v\n> ", senderID, err)
+				consoleLog("\rError decoding key from %s: %v\n> ", senderID, err)
 				continue
 			}
 			ciphertext, err := hex.DecodeString(ciphertextHex)
 			if err != nil {
-				fmt.Printf("\rError decoding ciphertext from %s: %v\n> ", senderID, err)
+				consoleLog("\rError decoding ciphertext from %s: %v\n> ", senderID, err)
 				continue
 			}
 
 			// Decrypt the message
 			if len(key) != len(ciphertext) {
-				fmt.Printf("\rKey and ciphertext lengths do not match from %s.\n> ", senderID)
+				consoleLog("\rKey and ciphertext lengths do not match from %s.\n> ", senderID)
 				continue
 			}
 			plaintext := encrypt(ciphertext, key)
 			if strings.HasPrefix(senderInfo, "MESSAGE from") {
-				fmt.Printf("\rMessage from %s: %s\n> ", senderID, string(plaintext))
+				consoleLog("\rMessage from %s: %s", senderID, string(plaintext))
 			} else if strings.HasPrefix(senderInfo, "BROADCAST from") {
-				fmt.Printf("\rBroadcast from %s: %s\n> ", senderID, string(plaintext))
+				consoleLog("\rBroadcast from %s: %s", senderID, string(plaintext))
 			}
+
+			printPrompt()
 		} else {
-			fmt.Println(message)
+			consoleLog(message)
 
 			if !inMultiLineResponse {
-				printPrompt(clientID, isOperator)
+				printPrompt()
 			}
 		}
 	}
@@ -186,7 +209,7 @@ func encryptAES(key, plaintext []byte) ([]byte, error) {
 // printUsage displays help text for the client commands.
 func printUsage(invalid bool) {
 	if invalid {
-		fmt.Println("Invalid command.")
+		consoleLog("Invalid command.")
 		printCommands()
 	} else {
 		printCommands()
@@ -195,16 +218,16 @@ func printUsage(invalid bool) {
 
 // printCommands prints the list of available client and server commands.
 func printCommands() {
-	fmt.Println("Available client commands:")
-	fmt.Println("SEND <RecipientID|ALL> <Message> - Send a message to a specific client or all clients")
-	fmt.Println("HELP - Print this help text")
-	fmt.Println("SERVERHELP - Print server help text")
-	fmt.Println("EXIT - Exit the program")
+	consoleLog("Available client commands:")
+	consoleLog("SEND <RecipientID|ALL> <Message> - Send a message to a specific client or all clients")
+	consoleLog("HELP - Print this help text")
+	consoleLog("SERVERHELP - Print server help text")
+	consoleLog("EXIT - Exit the program")
 }
 
-// printPrompt prints the client prompt, showing the client ID and operator status.
-func printPrompt(clientID string, isOperator bool) {
-	fmt.Printf("%s%s > ", clientID, func() string {
+// printPrompt prints the prompt showing client ID and operator status
+func printPrompt() {
+	fmt.Printf("\r%s%s > ", clientID, func() string {
 		if isOperator {
 			return " (op)"
 		}
@@ -214,27 +237,27 @@ func printPrompt(clientID string, isOperator bool) {
 
 func main() {
 	if len(os.Args) < 3 {
-		fmt.Println("Usage: go run client.go <YourID> <TailscaleServer>")
+		consoleLog("Usage: go run client.go <YourID> <TailscaleServer>")
 		return
 	}
-	clientID := os.Args[1]
+	clientID = os.Args[1]
 	serverIP := os.Args[2]
 	address := serverIP + ":12345"
 
 	// Check if the local IP address belongs to a Tailscale interface
 	isTailscale, err := tailutils.HasTailscaleIP()
 	if err != nil {
-		fmt.Println("Error checking local IP address:", err)
+		consoleLog("Error checking local IP address:", err)
 		return
 	}
 	if !isTailscale {
-		fmt.Println("Please connect to a Tailscale network.")
+		consoleLog("Please connect to a Tailscale network.")
 		return
 	}
 
 	conn, err := net.Dial("tcp", address)
 	if err != nil {
-		fmt.Println("Error connecting to server:", err)
+		consoleLog("Error connecting to server:", err)
 		return
 	}
 	defer conn.Close()
@@ -242,7 +265,7 @@ func main() {
 	// Generate ECDH key pair
 	clientPrivKey, err := ecdh.P256().GenerateKey(rand.Reader)
 	if err != nil {
-		fmt.Println("Error generating ECDH key:", err)
+		consoleLog("Error generating ECDH key:", err)
 		return
 	}
 	clientPubKey := clientPrivKey.PublicKey()
@@ -256,15 +279,15 @@ func main() {
 	// Wait for "REGISTERED" response
 	response, err := reader.ReadString('\n')
 	if err != nil {
-		fmt.Println("Error reading server response:", err)
+		consoleLog("Error reading server response:", err)
 		return
 	}
 	response = strings.TrimSpace(response)
 	if response == "REGISTERED as operator" {
 		isOperator = true
-		fmt.Println("You are registered as the server operator.")
+		consoleLog("You are registered as the server operator.")
 	} else if response != "REGISTERED" {
-		fmt.Println("Failed to register with server:", response)
+		consoleLog("Failed to register with server:", response)
 		return
 	}
 
@@ -273,7 +296,7 @@ func main() {
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
-			fmt.Println("Error reading public key from server:", err)
+			consoleLog("Error reading public key from server:", err)
 			return
 		}
 		line = strings.TrimSpace(line)
@@ -289,19 +312,19 @@ func main() {
 	// Parse the server's public key
 	serverPubKeyBytes, err := hex.DecodeString(pubKeyHex)
 	if err != nil {
-		fmt.Println("Error decoding server's public key:", err)
+		consoleLog("Error decoding server's public key:", err)
 		return
 	}
 	serverPubKey, err := ecdh.P256().NewPublicKey(serverPubKeyBytes)
 	if err != nil {
-		fmt.Println("Error creating server's public key:", err)
+		consoleLog("Error creating server's public key:", err)
 		return
 	}
 
 	// Compute shared secret
 	sharedSecret, err := clientPrivKey.ECDH(serverPubKey)
 	if err != nil {
-		fmt.Println("Error computing shared secret:", err)
+		consoleLog("Error computing shared secret:", err)
 		return
 	}
 	// Hash the shared secret to derive a key
@@ -317,7 +340,7 @@ func main() {
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
-			fmt.Println("Error reading server response:", err)
+			consoleLog("Error reading server response:", err)
 			return
 		}
 		line = strings.TrimSpace(line)
@@ -325,24 +348,24 @@ func main() {
 			break
 		} else {
 			// We got something else, error
-			fmt.Println("Unexpected server response:", line)
+			consoleLog("Unexpected server response:", line)
 			return
 		}
 	}
 
-	fmt.Println("Connected to the server. Type your commands below:")
+	consoleLog("Connected to the server. Type your commands below:")
 	if isOperator {
-		fmt.Println("You are the server operator. Type HELP to see available commands.")
+		consoleLog("You are the server operator. Type HELP to see available commands.")
 	} else {
-		fmt.Println("Type HELP to see available commands.")
+		consoleLog("Type HELP to see available commands.")
 	}
-	printPrompt(clientID, isOperator)
+	printPrompt()
 
 	// Channel to signal when to exit
 	done := make(chan bool)
 
 	// Start a goroutine to read messages from the server
-	go readMessages(conn, done, clientID)
+	go readMessages(conn, done)
 
 	// Start a goroutine to read user input
 	inputChan := make(chan string)
@@ -351,7 +374,7 @@ func main() {
 		for {
 			input, err := stdinReader.ReadString('\n')
 			if err != nil {
-				fmt.Println("Error reading input:", err)
+				consoleLog("Error reading input:", err)
 				close(inputChan)
 				return
 			}
@@ -364,26 +387,26 @@ func main() {
 	for {
 		select {
 		case <-done:
-			fmt.Println("Exiting...")
+			consoleLog("Exiting...")
 			return
 		case input, ok := <-inputChan:
 			if !ok {
-				fmt.Println("Input channel closed.")
+				consoleLog("Input channel closed.")
 				return
 			}
 
 			// Update command parsing to enforce exact match
 			parts := strings.Fields(input)
 			if len(parts) == 0 {
-				printPrompt(clientID, isOperator)
+				printPrompt()
 				continue
 			}
 
 			switch parts[0] {
 			case "SEND":
 				if len(parts) < 3 {
-					fmt.Println("Invalid SEND command. Use: SEND <RecipientID|ALL> <Message>")
-					printPrompt(clientID, isOperator)
+					consoleLog("Invalid SEND command. Use: SEND <RecipientID|ALL> <Message>")
+					printPrompt()
 					continue
 				}
 				recipientID := parts[1]
@@ -393,8 +416,8 @@ func main() {
 					// Encrypt the message using the shared secret
 					encryptedData, err := encryptAES(hashedSecret[:], []byte(messageText))
 					if err != nil {
-						fmt.Println("Error encrypting message:", err)
-						printPrompt(clientID, isOperator)
+						consoleLog("Error encrypting message:", err)
+						printPrompt()
 						continue
 					}
 					// Encode the encrypted data in hex
@@ -406,8 +429,8 @@ func main() {
 					key := make([]byte, len(messageText))
 					_, err := rand.Read(key)
 					if err != nil {
-						fmt.Println("Error generating OTP key:", err)
-						printPrompt(clientID, isOperator)
+						consoleLog("Error generating OTP key:", err)
+						printPrompt()
 						continue
 					}
 
@@ -423,14 +446,14 @@ func main() {
 					encryptedData := keyHex + "|" + ciphertextHex
 					fmt.Fprintf(conn, "SEND %s %s\n", recipientID, encryptedData)
 				}
-				printPrompt(clientID, isOperator)
+				printPrompt()
 			case "HELP":
 				// Handle HELP command
 				printUsage(false)
-				printPrompt(clientID, isOperator)
+				printPrompt()
 			case "EXIT":
 				fmt.Fprintf(conn, "EXIT\n")
-				fmt.Println("Exiting...")
+				consoleLog("Exiting...")
 				return
 			default:
 				// Pass the command to the server
