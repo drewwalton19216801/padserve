@@ -17,6 +17,7 @@ This document describes the API for interacting with a secure messaging server t
   - [UNBAN](#unban)
   - [LISTBANS](#listbans)
 - [Encryption Schemes](#encryption-schemes)
+- [Multi-Line Messages](#multi-line-messages)
 
 ## Connection
 The server listens on a secure Tailscale IP address on port `12345`. Clients must connect to the server using the Tailscale network. Ensure you have Tailscale installed and correctly configured to connect.
@@ -136,9 +137,33 @@ The first client to register becomes the operator and has additional privileges.
   - **Key and Ciphertext Encoding**: Both the key and ciphertext are encoded in hexadecimal format before transmission.
 - **Security Note**: OTP encryption ensures perfect secrecy if the key is truly random and used only once. The recipient uses the provided key to decrypt the message.
 
+## Multi-Line Messages
+
+### Server Communication for Multi-Line Messages
+- The server uses specific markers to communicate multi-line messages to clients to ensure proper parsing and interpretation.
+- **Markers Used**:
+  - `BEGIN_RESPONSE`: Indicates the beginning of a multi-line response from the server.
+  - `END_RESPONSE`: Indicates the end of a multi-line response from the server.
+- The client should wait until the `END_RESPONSE` marker is received before processing the full response.
+
+### Example Multi-Line Response
+- When a client issues the `LIST` command, the server responds with:
+  ```
+  BEGIN_RESPONSE
+  CLIENT client1
+  CLIENT client2
+  END_RESPONSE
+  ```
+  The client must parse all lines between `BEGIN_RESPONSE` and `END_RESPONSE` to gather the complete list of connected clients.
+
+### Parsing Multi-Line Responses
+- Clients should be designed to handle messages that begin with `BEGIN_RESPONSE` and read all subsequent lines until `END_RESPONSE`.
+- This ensures that multi-line data, such as client lists or banned client lists, is fully received before any processing occurs.
+
 ## Notes
 - The server automatically handles the secure key exchange using ECDH, enabling secure communication.
 - Operator commands are restricted to the client initially registered as the operator.
 - Use encryption protocols to ensure confidentiality of the messages.
 
 Ensure you understand the secure messaging workflow and respect other users on the server. Proper encryption and following protocol will ensure the safe and effective use of this system.
+
