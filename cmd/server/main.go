@@ -1,11 +1,37 @@
 // Package main implements a secure TCP server that communicates over a Tailscale network.
-// The server uses ECDH key exchange to establish shared secrets with clients for encrypted communication.
-// Clients can register with the server, exchange public keys, and send encrypted messages to other clients.
+// The server facilitates encrypted communication between clients using ECDH key exchange and AES encryption.
+// Clients can register with the server, exchange public keys, and send encrypted messages to other clients or broadcast messages to all clients.
 // The server supports commands such as REGISTER, SEND, LIST, INFO, and SERVERHELP.
+// The first client to register becomes the operator and can issue operator commands such as KICK, BAN, UNBAN, and LISTBANS.
 //
+// The server can be run in IPv4 and/or IPv6 mode, based on command-line flags (-ipv4 and -ipv6).
 // To run the server, ensure that you have Tailscale installed and configured.
 // The server will automatically detect its Tailscale IP address and listen on port 12345.
-// Clients can connect to the server using the Tailscale IP address and communicate using the defined protocol.
+// Clients can connect to the server using the Tailscale IP address or hostname, and communicate using the defined protocol.
+//
+// Commands:
+//   - REGISTER <clientID>: Registers a new client with the given ID.
+//   - SEND <recipientID> <encryptedData>: Sends an encrypted message to the specified recipient.
+//     Use recipientID "ALL" to send a broadcast message to all clients.
+//   - LIST: Lists all connected clients.
+//   - INFO: Displays server information.
+//   - SERVERHELP: Displays a list of available server commands.
+//
+// Operator Commands (available to the operator client):
+// - KICK <clientID>: Kicks the specified client from the server.
+// - BAN <clientID>: Bans the specified client from the server.
+// - UNBAN <clientID>: Unbans the specified client.
+// - LISTBANS: Lists all banned clients.
+//
+// Encryption:
+// The server uses ECDH key exchange to establish shared secrets with clients.
+// All-client messages are encrypted using AES encryption with the shared secret keys.
+// For client-to-client messages, the server generates unique one-time keys for each recipient and encrypts the message using a simple XOR cipher.
+//
+// Notes:
+// - The server uses mutexes to synchronize access to shared resources such as the client list and operator ID.
+// - The server handles clients in separate goroutines for concurrent communication.
+// - The server can be run in IPv4 and/or IPv6 mode by using the -ipv4 and -ipv6 command-line flags.
 package main
 
 import (

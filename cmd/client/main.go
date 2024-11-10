@@ -1,13 +1,29 @@
 // Package main implements a client for a secure TCP server that communicates over a Tailscale network.
 // The client registers with the server, performs an ECDH key exchange to establish a shared secret,
 // and allows the user to send encrypted messages to other clients or broadcast messages to all clients.
+// The client supports commands such as SEND, HELP, SERVERHELP, and EXIT.
 //
-// Usage:
+// Commands:
+// - SEND <RecipientID|ALL> <Message>: Sends a message to a specific client or broadcasts to all clients.
+//   - If RecipientID is "ALL", the message is broadcast to all clients using AES encryption with the shared secret key established via ECDH.
+//   - If RecipientID is a specific client ID, the message is encrypted using a one-time pad (OTP) encryption (XOR cipher).
+//     A random key is generated for each message, and both the key and the ciphertext are sent to the server.
 //
-//	go run client.go <YourID> <TailscaleServer>
+// - HELP: Displays the list of available client commands.
+// - SERVERHELP: Requests and displays the list of available server commands from the server.
+// - EXIT: Exits the client program.
 //
-// Replace <YourID> with your chosen client identifier and <TailscaleServer> with the server's
-// Tailscale IP address or hostname. Ensure that you are connected to the Tailscale network before running the client.
+// Encryption:
+// - The client performs an ECDH key exchange with the server to establish a shared secret key.
+// - Broadcast messages ("SEND ALL") are encrypted using AES encryption with the shared secret key.
+// - Direct messages ("SEND <RecipientID>") are encrypted using a one-time pad (OTP) encryption (XOR cipher).
+//
+// Notes:
+// - The client listens for messages from the server in a separate goroutine and processes them accordingly.
+// - Incoming messages are decrypted based on the encryption method used (AES for broadcasts, OTP for direct messages).
+// - The client checks for a Tailscale network connection before attempting to connect to the server.
+// - The first client to register becomes the server operator and has additional privileges.
+// - The client handles disconnection scenarios and cleanly exits when necessary.
 package main
 
 import (
