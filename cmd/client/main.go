@@ -40,11 +40,15 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/drewwalton19216801/tailutils"
 )
 
-var isOperator bool
+var (
+	isOperator   bool       // Flag to track if the client is the operator
+	consoleMutex sync.Mutex // Mutex for console output
+)
 
 // encrypt performs OTP encryption (XOR cipher) on the message using the provided key.
 func encrypt(message, key []byte) []byte {
