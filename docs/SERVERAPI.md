@@ -44,7 +44,7 @@ The server uses ECDH (Elliptic Curve Diffie-Hellman) to establish a shared secre
   Server: END PUBLICKEY
   ```
   This shows a client registering and receiving confirmation along with the server's public key data.
-
+  
 - **Error Responses:**
   - `ERROR Client name already registered`: The provided client ID is already in use.
   - `ERROR You are banned from this server`: The client is banned.
@@ -55,6 +55,14 @@ The server uses ECDH (Elliptic Curve Diffie-Hellman) to establish a shared secre
 - The client sends its public key to the server for key exchange.
 - The server calculates a shared secret, which is used for future encrypted communications.
 
+- **Example Exchange**:
+  ```
+  Client: CLIENTPUBKEY
+  Client: 3056301006072a8648ce3d020106052b8104000a034200045f7d68...
+  Client: END CLIENTPUBKEY
+  Server: CLIENTPUBKEY_RECEIVED
+  ```
+  This shows the client sending its public key to the server, and the server acknowledging receipt.
 ### SEND
 **Syntax:** `SEND <recipientID|ALL> <encryptedMessage>`
 

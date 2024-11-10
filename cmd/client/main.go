@@ -297,6 +297,22 @@ func main() {
 	fmt.Fprintf(conn, "%s\n", hex.EncodeToString(clientPubKeyBytes))
 	fmt.Fprintf(conn, "END CLIENTPUBKEY\n")
 
+	// Wait until we get CLIENTPUBKEY_RECEIVED from the server, error if we don't
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			fmt.Println("Error reading server response:", err)
+			return
+		}
+		line = strings.TrimSpace(line)
+		if line == "CLIENTPUBKEY_RECEIVED" {
+			break
+		} else {
+			// We got something else, error
+			fmt.Println("Unexpected server response:", line)
+		}
+	}
+
 	fmt.Println("Connected to the server. Type your commands below:")
 	if isOperator {
 		fmt.Println("You are the server operator. Type HELP to see available commands.")
