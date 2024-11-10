@@ -31,7 +31,9 @@ The server uses ECDH (Elliptic Curve Diffie-Hellman) to establish a shared secre
 
 - Registers a client with a unique identifier (`clientID`).
 - If successful, the server responds with `REGISTERED`. The first client to register becomes the operator and will receive the message `REGISTERED as operator`.
-- Clients will also receive the server's public key to initiate the key exchange.
+- Upon successful registration, the server provides the public key in the following format:
+  - `PUBLICKEY` followed by the public key data in hexadecimal format.
+  - The response ends with `END PUBLICKEY` to indicate the completion of the key data transmission.
 - **Error Responses:**
   - `ERROR Client name already registered`: The provided client ID is already in use.
   - `ERROR You are banned from this server`: The client is banned.
