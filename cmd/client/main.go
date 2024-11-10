@@ -310,6 +310,7 @@ func main() {
 		} else {
 			// We got something else, error
 			fmt.Println("Unexpected server response:", line)
+			return
 		}
 	}
 
