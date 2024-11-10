@@ -133,6 +133,11 @@ The first client to connect to the server is given access to Operator commands:
 
 - Messages are encrypted with either AES (for all-client messages) or OTP encryption (for individual messages).
 - Shared secrets are derived using ECDH and hashed with SHA-256.
+- Operator commands are restricted to the client initially registered as the operator.
+
+## Contributing
+
+Please refer to our [CONTRIBUTING.md](docs/CONTRIBUTING.md) file for details on how to contribute to this project.
 
 ## License
 
