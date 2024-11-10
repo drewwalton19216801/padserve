@@ -34,6 +34,17 @@ The server uses ECDH (Elliptic Curve Diffie-Hellman) to establish a shared secre
 - Upon successful registration, the server provides the public key in the following format:
   - `PUBLICKEY` followed by the public key data in hexadecimal format.
   - The response ends with `END PUBLICKEY` to indicate the completion of the key data transmission.
+
+- **Example Exchange**:
+  ```
+  Client: REGISTER client1
+  Server: REGISTERED as operator
+  Server: PUBLICKEY
+  Server: 3056301006072a8648ce3d020106052b8104000a034200045f7d68...
+  Server: END PUBLICKEY
+  ```
+  This shows a client registering and receiving confirmation along with the server's public key data.
+
 - **Error Responses:**
   - `ERROR Client name already registered`: The provided client ID is already in use.
   - `ERROR You are banned from this server`: The client is banned.
