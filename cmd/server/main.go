@@ -52,7 +52,8 @@ import (
 	"github.com/drewwalton19216801/tailutils"
 )
 
-// Client represents a connected client with its associated ID, connection, public key, and shared secret.
+// Client holds information about a connected client, including its unique identifier, network connection,
+// ECDH public key, and the shared secret established with the server.
 type Client struct {
 	ID           string
 	Conn         net.Conn
@@ -61,36 +62,38 @@ type Client struct {
 }
 
 var (
-	clients       = make(map[string]*Client) // clients stores the connected clients indexed by their ID.
-	clientMutex   = sync.RWMutex{}           // mutex synchronizes access to the clients map.
-	serverPrivKey *ecdh.PrivateKey           // serverPrivKey is the server's ECDH private key.
-	serverPubKey  *ecdh.PublicKey            // serverPubKey is the server's ECDH public key.
-	operatorID    string                     // Store the operator's ID
-	operatorMutex = sync.RWMutex{}           // Mutex for operator operations
-	listenerWG    sync.WaitGroup             // WaitGroup for listeners
-	bannedClients = make(map[string]bool)    // Store banned clients
-	banMutex      = sync.RWMutex{}           // Mutex for ban operations
+	clients       = make(map[string]*Client) // clients maps client IDs to their corresponding Client structures.
+	clientMutex   = sync.RWMutex{}           // clientMutex synchronizes access to the clients map.
+	serverPrivKey *ecdh.PrivateKey           // serverPrivKey holds the server's ECDH private key.
+	serverPubKey  *ecdh.PublicKey            // serverPubKey holds the server's ECDH public key.
+	operatorID    string                     // operatorID stores the client ID of the operator.
+	operatorMutex = sync.RWMutex{}           // operatorMutex synchronizes access to the operatorID variable.
+	listenerWG    sync.WaitGroup             // listenerWG manages synchronization of listener goroutines.
+	bannedClients = make(map[string]bool)    // bannedClients maps banned client IDs to a boolean value.
+	banMutex      = sync.RWMutex{}           // banMutex synchronizes access to the bannedClients map.
 )
 
-// isOperator returns true if the provided client ID is the operator's ID, false otherwise.
+// isOperator returns true if the provided client ID is the operator's ID.
 func isOperator(clientID string) bool {
 	operatorMutex.RLock()
 	defer operatorMutex.RUnlock()
 	return clientID == operatorID
 }
 
-// isBanned returns true if the provided client ID is banned, false otherwise.
+// isBanned returns true if the provided client ID is banned.
 func isBanned(clientID string) bool {
 	banMutex.RLock()
 	defer banMutex.RUnlock()
 	return bannedClients[clientID]
 }
 
-// handleOperatorCommand processes an operator command and takes the appropriate action.
-//
-// The following commands are supported:
-//
-// - KICK <clientID>: Kicks the specified client from the server.
+// handleOperatorCommand processes operator commands issued by the operator client.
+// Supported commands include:
+// - KICK <clientID>: Disconnects the specified client from the server.
+// - BAN <clientID>: Bans the specified client and disconnects them if connected.
+// - UNBAN <clientID>: Removes a client from the banned list.
+// - LISTBANS: Lists all currently banned clients.
+// The function checks if the sender is the operator before executing the command.
 func handleOperatorCommand(command, senderID string, args []string, conn net.Conn) {
 	if !isOperator(senderID) {
 		conn.Write([]byte("ERROR Not authorized as operator\n"))
@@ -111,6 +114,7 @@ func handleOperatorCommand(command, senderID string, args []string, conn net.Con
 			return
 		}
 
+		// Lock the clients map to safely access and modify it
 		clientMutex.Lock()
 		if client, exists := clients[targetID]; exists {
 			client.Conn.Write([]byte("KICKED You have been kicked by the operator\n"))
@@ -131,9 +135,11 @@ func handleOperatorCommand(command, senderID string, args []string, conn net.Con
 			conn.Write([]byte("ERROR Cannot ban the operator\n"))
 			return
 		}
+		// Add client to the banned list
 		banMutex.Lock()
 		bannedClients[targetID] = true
 		banMutex.Unlock()
+		// Disconnect the client if connected
 		clientMutex.Lock()
 		if client, exists := clients[targetID]; exists {
 			client.Conn.Write([]byte("BANNED You have been banned by the operator\n"))
@@ -148,6 +154,7 @@ func handleOperatorCommand(command, senderID string, args []string, conn net.Con
 			return
 		}
 		targetID := args[0]
+		// Remove client from the banned list
 		banMutex.Lock()
 		if _, exists := bannedClients[targetID]; exists {
 			delete(bannedClients, targetID)
@@ -157,6 +164,7 @@ func handleOperatorCommand(command, senderID string, args []string, conn net.Con
 		}
 		banMutex.Unlock()
 	case "LISTBANS":
+		// List all banned clients
 		conn.Write([]byte("BEGIN_RESPONSE\n"))
 		banMutex.RLock()
 		if len(bannedClients) == 0 {
@@ -173,7 +181,9 @@ func handleOperatorCommand(command, senderID string, args []string, conn net.Con
 	}
 }
 
-// handleClient handles communication with a connected client over the given net.Conn.
+// handleClient manages the interaction with a single client connection.
+// It listens for commands from the client, processes them, and sends responses.
+// It handles client registration, public key exchange, message sending, and operator commands.
 func handleClient(ctx context.Context, cancel context.CancelFunc, conn net.Conn) {
 	defer conn.Close()
 	defer cancel()
@@ -216,12 +226,15 @@ func handleClient(ctx context.Context, cancel context.CancelFunc, conn net.Conn)
 
 		switch command {
 		case "REGISTER":
+			// Handle client registration
 			if len(args) == 1 {
 				clientIDCandidate := args[0]
+				// Check if the client is banned
 				if isBanned(clientIDCandidate) {
 					conn.Write([]byte("ERROR You are banned from this server\n"))
 					return
 				}
+				// Check if clientID is already taken
 				clientMutex.RLock()
 				_, ok := clients[clientIDCandidate]
 				clientsEmpty := len(clients) == 0
@@ -232,11 +245,13 @@ func handleClient(ctx context.Context, cancel context.CancelFunc, conn net.Conn)
 					continue
 				}
 
+				// Register the client
 				clientID = clientIDCandidate
 				clientMutex.Lock()
 				clients[clientID] = &Client{ID: clientID, Conn: conn}
 				clientMutex.Unlock()
 
+				// If this is the first client, assign operator role
 				if clientsEmpty {
 					operatorMutex.Lock()
 					operatorID = clientID
@@ -248,6 +263,7 @@ func handleClient(ctx context.Context, cancel context.CancelFunc, conn net.Conn)
 					fmt.Printf("Client registered: %s\n", clientID)
 				}
 
+				// Send server's public key to the client
 				pubKeyBytes := serverPubKey.Bytes()
 				conn.Write([]byte("PUBLICKEY\n"))
 				conn.Write([]byte(hex.EncodeToString(pubKeyBytes) + "\n"))
@@ -256,26 +272,31 @@ func handleClient(ctx context.Context, cancel context.CancelFunc, conn net.Conn)
 				conn.Write([]byte("ERROR Invalid REGISTER command\n"))
 			}
 		case "KICK":
+			// Handle KICK command from operator
 			if len(args) >= 1 {
 				handleOperatorCommand("KICK", clientID, args, conn)
 			} else {
 				conn.Write([]byte("ERROR Invalid KICK command\n"))
 			}
 		case "BAN":
+			// Handle BAN command from operator
 			if len(args) >= 1 {
 				handleOperatorCommand("BAN", clientID, args, conn)
 			} else {
 				conn.Write([]byte("ERROR Invalid BAN command\n"))
 			}
 		case "UNBAN":
+			// Handle UNBAN command from operator
 			if len(args) >= 1 {
 				handleOperatorCommand("UNBAN", clientID, args, conn)
 			} else {
 				conn.Write([]byte("ERROR Invalid UNBAN command\n"))
 			}
 		case "LISTBANS":
+			// Handle LISTBANS command from operator
 			handleOperatorCommand("LISTBANS", clientID, args, conn)
 		case "CLIENTPUBKEY":
+			// Handle client's public key for ECDH key exchange
 			pubKeyHex := ""
 			for {
 				line, err := reader.ReadString('\n')
@@ -290,6 +311,7 @@ func handleClient(ctx context.Context, cancel context.CancelFunc, conn net.Conn)
 				pubKeyHex += line
 			}
 
+			// Decode the client's public key from hex
 			clientPubKeyBytes, err := hex.DecodeString(pubKeyHex)
 			if err != nil {
 				fmt.Println("Error decoding client's public key:", err)
@@ -301,13 +323,16 @@ func handleClient(ctx context.Context, cancel context.CancelFunc, conn net.Conn)
 				return
 			}
 
+			// Compute the shared secret using ECDH
 			sharedSecret, err := serverPrivKey.ECDH(clientPubKey)
 			if err != nil {
 				fmt.Println("Error computing shared secret:", err)
 				return
 			}
 
+			// Hash the shared secret using SHA-256
 			hashedSecret := sha256.Sum256(sharedSecret)
+			// Store the client's public key and shared secret
 			clientMutex.Lock()
 			if client, exists := clients[clientID]; exists {
 				client.PublicKey = clientPubKey
@@ -317,11 +342,13 @@ func handleClient(ctx context.Context, cancel context.CancelFunc, conn net.Conn)
 
 			conn.Write([]byte("CLIENTPUBKEY_RECEIVED\n"))
 		case "SEND":
+			// Handle sending messages to clients
 			if len(args) == 2 {
 				recipientID := args[0]
 				encryptedDataHex := args[1]
 
 				if recipientID == "ALL" {
+					// Handle broadcast message
 					clientMutex.RLock()
 					client := clients[clientID]
 					clientMutex.RUnlock()
@@ -339,15 +366,18 @@ func handleClient(ctx context.Context, cancel context.CancelFunc, conn net.Conn)
 						conn.Write([]byte("ERROR Decryption failed\n"))
 						continue
 					}
+					// Broadcast the message to all clients
 					handleBroadcast(clientID, string(plaintext))
 					conn.Write([]byte("BROADCAST SENT\n"))
 				} else {
+					// Send message to a specific client
 					sendMessageToClient(clientID, recipientID, encryptedDataHex)
 				}
 			} else {
 				conn.Write([]byte("ERROR Invalid SEND command\n"))
 			}
 		case "LIST":
+			// List all connected clients
 			conn.Write([]byte("BEGIN_RESPONSE\n"))
 			clientMutex.RLock()
 			for _, client := range clients {
@@ -356,6 +386,7 @@ func handleClient(ctx context.Context, cancel context.CancelFunc, conn net.Conn)
 			clientMutex.RUnlock()
 			conn.Write([]byte("END_RESPONSE\n"))
 		case "INFO":
+			// Provide server information
 			tailscaleIP4, ip4err := tailutils.GetTailscaleIP()
 			tailscaleIP6, ip6err := tailutils.GetTailscaleIP6()
 			tailscaleIP := ""
@@ -374,14 +405,11 @@ func handleClient(ctx context.Context, cancel context.CancelFunc, conn net.Conn)
 				conn.Write([]byte(fmt.Sprintf("INFO Tailscale IP(s): %s\n", tailscaleIP)))
 			}
 		case "SERVERHELP":
-			// Determine if the client is an operator
+			// Provide list of available server commands
 			operatorStatus := isOperator(clientID)
-			// Send BEGIN_RESPONSE marker
 			conn.Write([]byte("BEGIN_RESPONSE\n"))
-			// Send the help text
 			helpText := printServerCommands(operatorStatus)
 			conn.Write([]byte(helpText))
-			// Send END_RESPONSE marker
 			conn.Write([]byte("END_RESPONSE\n"))
 		default:
 			conn.Write([]byte("ERROR Unknown command: " + message + "\n"))
@@ -390,6 +418,7 @@ func handleClient(ctx context.Context, cancel context.CancelFunc, conn net.Conn)
 }
 
 // sendMessageToClient sends an encrypted message from the sender to the specified recipient.
+// It looks up the recipient in the clients map and sends the message if the recipient exists.
 func sendMessageToClient(senderID, recipientID, encryptedData string) {
 	clientMutex.RLock()
 	recipient, exists := clients[recipientID]
@@ -406,7 +435,9 @@ func sendMessageToClient(senderID, recipientID, encryptedData string) {
 	}
 }
 
-// handleBroadcast sends a broadcast message from the sender to all other connected clients.
+// handleBroadcast sends a message from the sender to all other connected clients.
+// For each recipient, it generates a unique one-time pad (OTP) key of the same length as the message,
+// encrypts the message using the XOR cipher with the key, and sends the encrypted data along with the key to the recipient.
 func handleBroadcast(senderID, messageText string) {
 	clientMutex.RLock()
 	recipients := make([]*Client, 0, len(clients))
@@ -426,7 +457,7 @@ func handleBroadcast(senderID, messageText string) {
 			continue
 		}
 
-		// Encrypt the message
+		// Encrypt the message using XOR cipher
 		plaintext := []byte(messageText)
 		ciphertext := encrypt(plaintext, key)
 
@@ -440,7 +471,9 @@ func handleBroadcast(senderID, messageText string) {
 	}
 }
 
-// decryptAES decrypts the given ciphertext using AES encryption with the provided key.
+// decryptAES decrypts the given ciphertext using AES-CBC mode with the provided key.
+// It assumes the ciphertext includes the initialization vector (IV) prepended to the encrypted data.
+// It also removes padding added during encryption to ensure the message length is a multiple of the block size.
 func decryptAES(key, ciphertext []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -456,7 +489,7 @@ func decryptAES(key, ciphertext []byte) ([]byte, error) {
 	mode := cipher.NewCBCDecrypter(block, iv)
 	mode.CryptBlocks(decrypted, ciphertext)
 
-	// Remove padding
+	// Remove padding added during encryption
 	padLen := int(decrypted[len(decrypted)-1])
 	if padLen > len(decrypted) {
 		return nil, fmt.Errorf("invalid padding")
@@ -465,6 +498,7 @@ func decryptAES(key, ciphertext []byte) ([]byte, error) {
 }
 
 // encrypt performs a simple XOR encryption of the message using the provided key.
+// It assumes that the key and message are of the same length.
 func encrypt(message, key []byte) []byte {
 	ciphertext := make([]byte, len(message))
 	for i := range message {
@@ -474,6 +508,7 @@ func encrypt(message, key []byte) []byte {
 }
 
 // printServerCommands returns a string containing the list of available server commands.
+// If the client is the operator, it includes operator-specific commands.
 func printServerCommands(isOperator bool) string {
 	var helptext string
 
@@ -495,6 +530,7 @@ func printServerCommands(isOperator bool) string {
 }
 
 // startListener starts a TCP listener on the specified network and address.
+// It accepts incoming connections and spawns a goroutine to handle each client.
 func startListener(ctx context.Context, network, address string) error {
 	ln, err := net.Listen(network, address)
 	if err != nil {
@@ -528,7 +564,8 @@ func startListener(ctx context.Context, network, address string) error {
 	}
 }
 
-// main is the entry point of the server program.
+// main initializes the server, parses command-line flags, generates the server's ECDH key pair,
+// and starts TCP listeners on the Tailscale IP addresses. It supports IPv4 and/or IPv6 based on the provided flags.
 func main() {
 	// Define command-line flags
 	var ipv4Flag, ipv6Flag bool
@@ -573,7 +610,7 @@ func main() {
 			fmt.Println("Error getting Tailscale IPv4:", err)
 			return
 		}
-		address4 := ip4 + ":12345" // Use port 12345 or any available port
+		address4 := ip4 + ":12345" // Use port 12345 (FIXME: make this configurable)
 		listenerWG.Add(1)
 		go func() {
 			defer listenerWG.Done()
