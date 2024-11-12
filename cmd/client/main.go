@@ -47,11 +47,12 @@ import (
 
 var (
 	isOperator   bool       // Flag to track if the client is the operator
-	consoleMutex sync.Mutex // Mutex for console output
-	clientID     string
+	consoleMutex sync.Mutex // Mutex for console output synchronization
+	clientID     string     // The client's unique identifier
 )
 
 // encrypt performs OTP encryption (XOR cipher) on the message using the provided key.
+// It assumes that the key and message are of the same length.
 func encrypt(message, key []byte) []byte {
 	ciphertext := make([]byte, len(message))
 	for i := range message {
@@ -60,17 +61,17 @@ func encrypt(message, key []byte) []byte {
 	return ciphertext
 }
 
-// consoleLog prints messages to the console while maintaining the prompt
-// consoleLog prints messages to the console while maintaining thread safety
+// consoleLog prints messages to the console while maintaining thread safety.
+// It ensures that console output from different goroutines does not interleave.
 func consoleLog(message string, args ...interface{}) {
 	consoleMutex.Lock()
 	defer consoleMutex.Unlock()
-
-	// Print the formatted message
 	fmt.Printf(message+"\n", args...)
 }
 
 // readMessages continuously reads messages from the server and processes them.
+// It handles different types of messages such as regular messages, broadcasts,
+// multi-line responses, and disconnection notices.
 func readMessages(conn net.Conn, done chan bool) {
 	reader := bufio.NewReader(conn)
 	var inMultiLineResponse bool = false
@@ -87,24 +88,24 @@ func readMessages(conn net.Conn, done chan bool) {
 			continue
 		}
 
-		// Handle being registered
+		// Handle being registered as operator
 		if message == "REGISTERED as operator" {
 			isOperator = true
-			consoleLog("\rYou are registered as the server operator.")
+			consoleLog("You are registered as the server operator.")
 			printPrompt()
 			continue
 		}
 
 		// Handle being kicked
 		if message == "KICKED You have been kicked by the operator" {
-			consoleLog("\rYou have been kicked from the server by the operator.")
+			consoleLog("You have been kicked from the server by the operator.")
 			done <- true
 			return
 		}
 
 		// Handle being banned
 		if message == "BANNED You have been banned by the operator" {
-			consoleLog("\rYou have been banned from the server by the operator.")
+			consoleLog("You have been banned from the server by the operator.")
 			done <- true
 			return
 		}
@@ -122,6 +123,7 @@ func readMessages(conn net.Conn, done chan bool) {
 			continue // Skip printing the marker
 		}
 
+		// Handle incoming messages from other clients
 		if strings.HasPrefix(message, "MESSAGE from") || strings.HasPrefix(message, "BROADCAST from") {
 			parts := strings.SplitN(message, ": ", 2)
 			senderInfo := parts[0]
@@ -138,7 +140,7 @@ func readMessages(conn net.Conn, done chan bool) {
 			// Encrypted data format: key_hex|ciphertext_hex
 			dataParts := strings.SplitN(encryptedData, "|", 2)
 			if len(dataParts) != 2 {
-				consoleLog("\rInvalid message format from %s. Ignoring.\n> ", senderID)
+				consoleLog("Invalid message format from %s. Ignoring.", senderID)
 				continue
 			}
 			keyHex := dataParts[0]
@@ -147,31 +149,31 @@ func readMessages(conn net.Conn, done chan bool) {
 			// Decode hex strings
 			key, err := hex.DecodeString(keyHex)
 			if err != nil {
-				consoleLog("\rError decoding key from %s: %v\n> ", senderID, err)
+				consoleLog("Error decoding key from %s: %v", senderID, err)
 				continue
 			}
 			ciphertext, err := hex.DecodeString(ciphertextHex)
 			if err != nil {
-				consoleLog("\rError decoding ciphertext from %s: %v\n> ", senderID, err)
+				consoleLog("Error decoding ciphertext from %s: %v", senderID, err)
 				continue
 			}
 
-			// Decrypt the message
+			// Decrypt the message using XOR cipher
 			if len(key) != len(ciphertext) {
-				consoleLog("\rKey and ciphertext lengths do not match from %s.\n> ", senderID)
+				consoleLog("Key and ciphertext lengths do not match from %s.", senderID)
 				continue
 			}
 			plaintext := encrypt(ciphertext, key)
 			if strings.HasPrefix(senderInfo, "MESSAGE from") {
-				consoleLog("\rMessage from %s: %s", senderID, string(plaintext))
+				consoleLog("Message from %s: %s", senderID, string(plaintext))
 			} else if strings.HasPrefix(senderInfo, "BROADCAST from") {
-				consoleLog("\rBroadcast from %s: %s", senderID, string(plaintext))
+				consoleLog("Broadcast from %s: %s", senderID, string(plaintext))
 			}
 
 			printPrompt()
 		} else {
+			// Handle other server messages
 			consoleLog(message)
-
 			if !inMultiLineResponse {
 				printPrompt()
 			}
@@ -180,21 +182,30 @@ func readMessages(conn net.Conn, done chan bool) {
 }
 
 // encryptAES encrypts the plaintext using AES encryption with the provided key.
+// It ensures that the plaintext length is a multiple of the AES block size by adding padding.
+// The padding added is simply a series of bytes, each of which is equal to the number of padding bytes added.
 func encryptAES(key, plaintext []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
 	}
+
+	// Add padding to the plaintext to make its length a multiple of the block size
 	padding := aes.BlockSize - len(plaintext)%aes.BlockSize
 	padtext := bytes.Repeat([]byte{byte(padding)}, padding)
 	plaintext = append(plaintext, padtext...)
 
+	// Prepare the ciphertext slice with space for the IV
 	ciphertext := make([]byte, aes.BlockSize+len(plaintext))
 	iv := ciphertext[:aes.BlockSize]
+
+	// Generate a random initialization vector (IV)
 	_, err = io.ReadFull(rand.Reader, iv)
 	if err != nil {
 		return nil, err
 	}
+
+	// Encrypt the plaintext using AES-CBC mode
 	mode := cipher.NewCBCEncrypter(block, iv)
 	mode.CryptBlocks(ciphertext[aes.BlockSize:], plaintext)
 	return ciphertext, nil
@@ -219,7 +230,7 @@ func printCommands() {
 	consoleLog("EXIT - Exit the program")
 }
 
-// printPrompt prints the prompt showing client ID and operator status
+// printPrompt prints the prompt showing client ID and operator status.
 func printPrompt() {
 	fmt.Printf("\r%s%s > ", clientID, func() string {
 		if isOperator {
@@ -241,7 +252,7 @@ func main() {
 	// Check if the local IP address belongs to a Tailscale interface
 	isTailscale, err := tailutils.HasTailscaleIP()
 	if err != nil {
-		consoleLog("Error checking local IP address:", err)
+		consoleLog("Error checking local IP address: %v", err)
 		return
 	}
 	if !isTailscale {
@@ -251,15 +262,15 @@ func main() {
 
 	conn, err := net.Dial("tcp", address)
 	if err != nil {
-		consoleLog("Error connecting to server:", err)
+		consoleLog("Error connecting to server: %v", err)
 		return
 	}
 	defer conn.Close()
 
-	// Generate ECDH key pair
+	// Generate ECDH key pair for key exchange
 	clientPrivKey, err := ecdh.P256().GenerateKey(rand.Reader)
 	if err != nil {
-		consoleLog("Error generating ECDH key:", err)
+		consoleLog("Error generating ECDH key: %v", err)
 		return
 	}
 	clientPubKey := clientPrivKey.PublicKey()
@@ -273,7 +284,7 @@ func main() {
 	// Wait for "REGISTERED" response
 	response, err := reader.ReadString('\n')
 	if err != nil {
-		consoleLog("Error reading server response:", err)
+		consoleLog("Error reading server response: %v", err)
 		return
 	}
 	response = strings.TrimSpace(response)
@@ -281,16 +292,16 @@ func main() {
 		isOperator = true
 		consoleLog("You are registered as the server operator.")
 	} else if response != "REGISTERED" {
-		consoleLog("Failed to register with server:", response)
+		consoleLog("Failed to register with server: %s", response)
 		return
 	}
 
-	// Now read the server's public key
+	// Read the server's public key
 	pubKeyHex := ""
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
-			consoleLog("Error reading public key from server:", err)
+			consoleLog("Error reading public key from server: %v", err)
 			return
 		}
 		line = strings.TrimSpace(line)
@@ -306,22 +317,22 @@ func main() {
 	// Parse the server's public key
 	serverPubKeyBytes, err := hex.DecodeString(pubKeyHex)
 	if err != nil {
-		consoleLog("Error decoding server's public key:", err)
+		consoleLog("Error decoding server's public key: %v", err)
 		return
 	}
 	serverPubKey, err := ecdh.P256().NewPublicKey(serverPubKeyBytes)
 	if err != nil {
-		consoleLog("Error creating server's public key:", err)
+		consoleLog("Error creating server's public key: %v", err)
 		return
 	}
 
-	// Compute shared secret
+	// Compute shared secret using ECDH
 	sharedSecret, err := clientPrivKey.ECDH(serverPubKey)
 	if err != nil {
-		consoleLog("Error computing shared secret:", err)
+		consoleLog("Error computing shared secret: %v", err)
 		return
 	}
-	// Hash the shared secret to derive a key
+	// Hash the shared secret to derive a symmetric key
 	hashedSecret := sha256.Sum256(sharedSecret)
 
 	// Send the client's public key to the server
@@ -330,19 +341,19 @@ func main() {
 	fmt.Fprintf(conn, "%s\n", hex.EncodeToString(clientPubKeyBytes))
 	fmt.Fprintf(conn, "END CLIENTPUBKEY\n")
 
-	// Wait until we get CLIENTPUBKEY_RECEIVED from the server, error if we don't
+	// Wait for confirmation from the server
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
-			consoleLog("Error reading server response:", err)
+			consoleLog("Error reading server response: %v", err)
 			return
 		}
 		line = strings.TrimSpace(line)
 		if line == "CLIENTPUBKEY_RECEIVED" {
 			break
 		} else {
-			// We got something else, error
-			consoleLog("Unexpected server response:", line)
+			// Unexpected response from the server
+			consoleLog("Unexpected server response: %s", line)
 			return
 		}
 	}
@@ -361,14 +372,14 @@ func main() {
 	// Start a goroutine to read messages from the server
 	go readMessages(conn, done)
 
-	// Start a goroutine to read user input
+	// Start a goroutine to read user input from the console
 	inputChan := make(chan string)
 	go func() {
 		stdinReader := bufio.NewReader(os.Stdin)
 		for {
 			input, err := stdinReader.ReadString('\n')
 			if err != nil {
-				consoleLog("Error reading input:", err)
+				consoleLog("Error reading input: %v", err)
 				close(inputChan)
 				return
 			}
@@ -389,7 +400,7 @@ func main() {
 				return
 			}
 
-			// Update command parsing to enforce exact match
+			// Parse user input
 			parts := strings.Fields(input)
 			if len(parts) == 0 {
 				printPrompt()
@@ -407,10 +418,10 @@ func main() {
 				messageText := strings.Join(parts[2:], " ")
 
 				if recipientID == "ALL" {
-					// Encrypt the message using the shared secret
+					// Encrypt the message using AES with the shared secret
 					encryptedData, err := encryptAES(hashedSecret[:], []byte(messageText))
 					if err != nil {
-						consoleLog("Error encrypting message:", err)
+						consoleLog("Error encrypting message: %v", err)
 						printPrompt()
 						continue
 					}
@@ -419,16 +430,16 @@ func main() {
 					// Send the encrypted message to the server
 					fmt.Fprintf(conn, "SEND ALL %s\n", encryptedDataHex)
 				} else {
-					// Generate OTP key
+					// Generate a one-time pad (OTP) key
 					key := make([]byte, len(messageText))
 					_, err := rand.Read(key)
 					if err != nil {
-						consoleLog("Error generating OTP key:", err)
+						consoleLog("Error generating OTP key: %v", err)
 						printPrompt()
 						continue
 					}
 
-					// Encrypt the message
+					// Encrypt the message using XOR cipher
 					plaintext := []byte(messageText)
 					ciphertext := encrypt(plaintext, key)
 
@@ -442,15 +453,16 @@ func main() {
 				}
 				printPrompt()
 			case "HELP":
-				// Handle HELP command
+				// Display client commands help
 				printUsage(false)
 				printPrompt()
 			case "EXIT":
+				// Exit the client program
 				fmt.Fprintf(conn, "EXIT\n")
 				consoleLog("Exiting...")
 				return
 			default:
-				// Pass the command to the server
+				// Pass other commands to the server
 				fmt.Fprintf(conn, "%s\n", input)
 			}
 		}
