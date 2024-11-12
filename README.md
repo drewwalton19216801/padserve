@@ -141,6 +141,10 @@ The first client to connect to the server is given access to Operator commands:
 
 Please refer to our [CONTRIBUTING.md](docs/CONTRIBUTING.md) file for details on how to contribute to this project.
 
+## Also See
+
+- [tailutils](https://github.com/drewwalton19216801/tailutils) for Tailscale utility functions
+
 ## License
 
 This project is licensed under the MIT license.
