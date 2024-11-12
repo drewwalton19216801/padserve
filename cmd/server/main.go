@@ -36,6 +36,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ecdh"
@@ -60,16 +61,15 @@ type Client struct {
 }
 
 var (
-	clients        = make(map[string]*Client) // clients stores the connected clients indexed by their ID.
-	clientMutex    = sync.RWMutex{}           // mutex synchronizes access to the clients map.
-	serverPrivKey  *ecdh.PrivateKey           // serverPrivKey is the server's ECDH private key.
-	serverPubKey   *ecdh.PublicKey            // serverPubKey is the server's ECDH public key.
-	operatorID     string                     // Store the operator's ID
-	operatorMutex  = sync.RWMutex{}           // Mutex for operator operations
-	listenerWG     sync.WaitGroup             // WaitGroup for listeners
-	shutdownSignal = make(chan struct{})      // Channel to signal shutdown
-	bannedClients  = make(map[string]bool)    // Store banned clients
-	banMutex       = sync.RWMutex{}           // Mutex for ban operations
+	clients       = make(map[string]*Client) // clients stores the connected clients indexed by their ID.
+	clientMutex   = sync.RWMutex{}           // mutex synchronizes access to the clients map.
+	serverPrivKey *ecdh.PrivateKey           // serverPrivKey is the server's ECDH private key.
+	serverPubKey  *ecdh.PublicKey            // serverPubKey is the server's ECDH public key.
+	operatorID    string                     // Store the operator's ID
+	operatorMutex = sync.RWMutex{}           // Mutex for operator operations
+	listenerWG    sync.WaitGroup             // WaitGroup for listeners
+	bannedClients = make(map[string]bool)    // Store banned clients
+	banMutex      = sync.RWMutex{}           // Mutex for ban operations
 )
 
 // isOperator returns true if the provided client ID is the operator's ID, false otherwise.
@@ -174,12 +174,28 @@ func handleOperatorCommand(command, senderID string, args []string, conn net.Con
 }
 
 // handleClient handles communication with a connected client over the given net.Conn.
-func handleClient(conn net.Conn) {
+func handleClient(ctx context.Context, cancel context.CancelFunc, conn net.Conn) {
 	defer conn.Close()
+	defer cancel()
+
+	// Close the connection when context is done
+	go func() {
+		<-ctx.Done()
+		conn.Close()
+	}()
+
 	reader := bufio.NewReader(conn)
 	var clientID string
 
 	for {
+		// Check if context is done
+		select {
+		case <-ctx.Done():
+			fmt.Printf("Client %s context done.\n", clientID)
+			return
+		default:
+		}
+
 		message, err := reader.ReadString('\n')
 		if err != nil {
 			fmt.Printf("Client %s disconnected.\n", clientID)
@@ -479,7 +495,7 @@ func printServerCommands(isOperator bool) string {
 }
 
 // startListener starts a TCP listener on the specified network and address.
-func startListener(network, address string) error {
+func startListener(ctx context.Context, network, address string) error {
 	ln, err := net.Listen(network, address)
 	if err != nil {
 		return err
@@ -488,17 +504,27 @@ func startListener(network, address string) error {
 	fmt.Printf("Server is listening on %s (%s)...\n", address, network)
 
 	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+
 		conn, err := ln.Accept()
 		if err != nil {
 			select {
-			case <-shutdownSignal:
+			case <-ctx.Done():
 				return nil
 			default:
 				fmt.Printf("Error accepting %s connection: %v\n", network, err)
 				continue
 			}
 		}
-		go handleClient(conn)
+
+		// Create a child context for the client
+		clientCtx, clientCancel := context.WithCancel(ctx)
+
+		go handleClient(clientCtx, clientCancel, conn)
 	}
 }
 
@@ -509,6 +535,10 @@ func main() {
 	flag.BoolVar(&ipv4Flag, "ipv4", false, "Enable IPv4 mode")
 	flag.BoolVar(&ipv6Flag, "ipv6", false, "Enable IPv6 mode")
 	flag.Parse()
+
+	// Create a root context
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	// Determine modes based on flags
 	if !ipv4Flag && !ipv6Flag {
@@ -547,7 +577,7 @@ func main() {
 		listenerWG.Add(1)
 		go func() {
 			defer listenerWG.Done()
-			err := startListener("tcp4", address4)
+			err := startListener(ctx, "tcp4", address4)
 			if err != nil {
 				fmt.Printf("IPv4 listener error: %v\n", err)
 			}
@@ -565,7 +595,7 @@ func main() {
 		listenerWG.Add(1)
 		go func() {
 			defer listenerWG.Done()
-			err := startListener("tcp6", address6)
+			err := startListener(ctx, "tcp6", address6)
 			if err != nil {
 				fmt.Printf("IPv6 listener error: %v\n", err)
 			}
