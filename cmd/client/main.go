@@ -61,19 +61,13 @@ func encrypt(message, key []byte) []byte {
 }
 
 // consoleLog prints messages to the console while maintaining the prompt
+// consoleLog prints messages to the console while maintaining thread safety
 func consoleLog(message string, args ...interface{}) {
 	consoleMutex.Lock()
 	defer consoleMutex.Unlock()
 
-	// Save the cursor position, clear the line, print message, restore cursor, and then reprint the prompt
-	fmt.Print("\033[s") // Save cursor position
-	fmt.Print("\033[K") // Clear to the end of the line
-
-	// Print the message
+	// Print the formatted message
 	fmt.Printf(message+"\n", args...)
-
-	// Restore cursor position and print the prompt
-	fmt.Print("\033[u") // Restore cursor position
 }
 
 // readMessages continuously reads messages from the server and processes them.
