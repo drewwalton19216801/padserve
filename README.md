@@ -1,6 +1,6 @@
 # Padserve - Secure Messaging System over Tailscale
 
-[![Go](https://github.com/drewwalton19216801/padserve/actions/workflows/go.yml/badge.svg)](https://github.com/drewwalton19216801/padserve/actions/workflows/go.yml)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Go](https://github.com/drewwalton19216801/padserve/actions/workflows/go.yml/badge.svg)](https://github.com/drewwalton19216801/padserve/actions/workflows/go.yml)
 
 This Go-based messaging system implements a secure TCP server-client communication protocol, utilizing Tailscale to establish a secure network overlay. The server and clients use elliptic curve Diffie-Hellman (ECDH) key exchange to establish a shared secret for encrypted message exchanges, providing secure, authenticated communication over the Tailscale network.
 
@@ -57,33 +57,7 @@ The server supports the following commands sent from clients:
 
 ## Running the Client
 
-1. Connect to the Tailscale network and obtain the server’s Tailscale IP.
-2. Run the client in another terminal with:
-
-   ```sh
-   go run ./cmd/client <YourID> <TailscaleServerAddress>
-   ```
-   
-   Replace `<YourID>` with your chosen identifier and `<TailscaleServerAddress>` with the server's IP or hostname on the Tailscale network.
-
-### Client Commands
-
-Once connected, the client can use these commands:
-
-- `SEND <RecipientID|ALL> <Message>`: Send an encrypted message to a specific client or all clients.
-- `LIST`: List all clients connected to the server.
-- `HELP`: Display available client commands.
-- `SERVERHELP`: Display server help text.
-- `EXIT`: Disconnect from the server and exit the client.
-
-### Operator Commands
-
-The first client to connect to the server is given access to Operator commands:
-
-- `KICK <ClientID>`: Kick the specified client from the server.
-- `BAN <ClientID>`: Ban the specified client from the server.
-- `UNBAN <ClientID>`: Unban the specified client from the server.
-- `LISTBANS`: List the currently banned clients on the server.
+**UPDATE:** The client has been moved from this repository to its own repository. Please refer to the [Padserve Client](https://github.com/drewwalton19216801/padclient) for usage instructions.
 
 ## Example Usage
 
@@ -94,34 +68,6 @@ The first client to connect to the server is given access to Operator commands:
    ```
    
    This starts the server in dual-stack mode, listening on both IPv4 and IPv6 addresses.
-
-2. Start at least two clients:
-
-   ```sh
-   go run ./cmd/client Someone 100.64.x.x
-   ```
-   
-   Replace `Someone` with the client's chosen ID and `100.64.x.x` with the server's Tailscale IP address or hostname.
-
-3. List connected clients:
-
-   ```
-   LIST
-   ```
-
-4. Send a direct message:
-
-   ```
-   SEND Bob Hello, Bob!
-   ```
-   
-   Replace `Bob` with the client ID of another client.
-
-5. Send a broadcast message:
-
-   ```
-   SEND ALL Hello, everyone!
-   ```
 
 ## Notes
 
@@ -144,6 +90,7 @@ Please refer to our [CONTRIBUTING.md](docs/CONTRIBUTING.md) file for details on 
 ## Also See
 
 - [tailutils](https://github.com/drewwalton19216801/tailutils) for Tailscale utility functions
+- [padclient](https://github.com/drewwalton19216801/padclient) for the official Padserve Client implementation
 
 ## License
 
