@@ -1,5 +1,7 @@
 # Padserve - Secure Messaging System over Tailscale
 
+[![Go](https://github.com/drewwalton19216801/padserve/actions/workflows/go.yml/badge.svg)](https://github.com/drewwalton19216801/padserve/actions/workflows/go.yml)
+
 This Go-based messaging system implements a secure TCP server-client communication protocol, utilizing Tailscale to establish a secure network overlay. The server and clients use elliptic curve Diffie-Hellman (ECDH) key exchange to establish a shared secret for encrypted message exchanges, providing secure, authenticated communication over the Tailscale network.
 
 ## Features
