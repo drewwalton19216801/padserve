@@ -6,7 +6,10 @@ package main
 import (
 	"fmt"
 	"net"
+	"os"
 	"sync"
+
+	"github.com/drewwalton19216801/tailutils"
 )
 
 var (
@@ -23,6 +26,7 @@ func isOperator(clientID string) bool {
 
 // handleOperatorCommand processes operator commands issued by the operator client.
 // Supported commands include:
+// - SERVERINFO: Retrieves information about the server, including the Tailscale IP address.
 // - KICK <clientID>: Disconnects the specified client from the server.
 // - BAN <clientID>: Bans the specified client and disconnects them if connected.
 // - UNBAN <clientID>: Removes a client from the banned list.
@@ -35,6 +39,34 @@ func handleOperatorCommand(command, senderID string, args []string, conn net.Con
 	}
 
 	switch command {
+	case "SERVERINFO":
+		// Provide server information
+		tailscaleIP4, ip4err := tailutils.GetTailscaleIP()
+		tailscaleIP6, ip6err := tailutils.GetTailscaleIP6()
+		tailscaleIP := ""
+
+		if ip4err == nil && ip6err == nil {
+			tailscaleIP = fmt.Sprintf("%s, %s", tailscaleIP4, tailscaleIP6)
+		} else if ip4err == nil {
+			tailscaleIP = tailscaleIP4
+		} else if ip6err == nil {
+			tailscaleIP = tailscaleIP6
+		}
+
+		// Get the server's hostname
+		hostname, err := os.Hostname()
+		if err != nil {
+			hostname = "Unknown"
+		}
+
+		conn.Write([]byte(fmt.Sprintf("SERVERINFO Server: %s\n", hostname)))
+
+		if ip4err != nil && ip6err != nil {
+			// This should never happen, but we check just in case
+			conn.Write([]byte("SERVERINFO No Tailscale IP\n"))
+		} else {
+			conn.Write([]byte(fmt.Sprintf("SERVERINFO Tailscale IP(s): %s\n", tailscaleIP)))
+		}
 	case "KICK":
 		if len(args) != 1 {
 			conn.Write([]byte("ERROR Usage: KICK <clientID>\n"))
