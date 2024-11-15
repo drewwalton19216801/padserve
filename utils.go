@@ -26,10 +26,10 @@ func printServerCommands(isOperator bool) string {
 
 	helptext += "Available server commands:\n"
 	helptext += "LIST - List all connected clients\n"
-	helptext += "INFO - Print server information\n"
 
 	if isOperator {
 		helptext += "Operator commands:\n"
+		helptext += "SERVERINFO - Retrieve server information\n"
 		helptext += "KICK <clientID> - Kick a client from the server\n"
 		helptext += "BAN <clientID> - Ban a client from the server\n"
 		helptext += "UNBAN <clientID> - Unban a client from the server\n"
