@@ -81,13 +81,6 @@ The server uses ECDH (Elliptic Curve Diffie-Hellman) to establish a shared secre
 - **Response:**
   - `BEGIN_RESPONSE` followed by `CLIENT <clientID>` for each connected client, ending with `END_RESPONSE`.
 
-### INFO
-**Syntax:** `INFO`
-
-- Retrieves information about the server, including the Tailscale IP address.
-- **Response:**
-  - `INFO Tailscale IP(s): <ip-addresses>` or `INFO No Tailscale IP` if unavailable.
-
 ### SERVERHELP
 **Syntax:** `SERVERHELP`
 
@@ -97,6 +90,16 @@ The server uses ECDH (Elliptic Curve Diffie-Hellman) to establish a shared secre
 
 ## Operator Commands
 The first client to register becomes the operator and has additional privileges.
+
+### SERVERINFO
+**Syntax:** `SERVERINFO`
+
+- Retrieves information about the server, including its Tailscale IP address and hostname.
+- **Response:**
+  ```
+  SERVERINFO Server: <hostname>
+  SERVERINFO Tailscale IP(s): <ip1>, <ip2>
+  ```
 
 ### KICK
 **Syntax:** `KICK <clientID>`
