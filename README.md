@@ -28,6 +28,14 @@ git clone https://github.com/drewwalton19216801/padserve.git
 cd padserve
 ```
 
+## Building the Server
+
+To build the server, run the following command:
+
+```sh
+go build
+```
+
 ## Running the Server
 
 The server can detect its Tailscale IP address (both IPv4 and IPv6) and listen on port `12345`. The server can be run in IPv4 mode, IPv6 mode, or both, based on user preferences.
@@ -36,7 +44,7 @@ The server can detect its Tailscale IP address (both IPv4 and IPv6) and listen o
 2. Start the server with:
 
    ```sh
-   go run ./cmd/server [-ipv4] [-ipv6]
+   go run . [-ipv4] [-ipv6]
    ```
    
    Use the `-ipv4` flag to enable IPv4 mode, the `-ipv6` flag to enable IPv6 mode, or both to enable dual-stack support.
@@ -64,7 +72,7 @@ The server supports the following commands sent from clients:
 1. Start the server:
 
    ```sh
-   go run ./cmd/server -ipv4 -ipv6
+   go run . -ipv4 -ipv6
    ```
    
    This starts the server in dual-stack mode, listening on both IPv4 and IPv6 addresses.
