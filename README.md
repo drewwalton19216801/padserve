@@ -60,8 +60,15 @@ The server supports the following commands sent from clients:
 - `REGISTER <ClientID>`: Registers a new client with a unique ID.
 - `SEND <RecipientID|ALL> <Message>`: Sends a message to a specific client or broadcasts to all.
 - `LIST`: Lists all connected clients.
-- `INFO`: Displays server IP and client details.
 - `SERVERHELP`: Lists available server commands.
+
+#### Operator Commands
+
+- `SERVERINFO`: Displays server information.
+- `KICK <ClientID>`: Disconnects the specified client from the server.
+- `BAN <ClientID>`: Bans the specified client and disconnects them if connected.
+- `UNBAN <ClientID>`: Removes a client from the banned list.
+- `LISTBANS`: Lists all banned clients.
 
 ## Running the Client
 
